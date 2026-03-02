@@ -53,3 +53,8 @@ workbox-*.js
 
 # Docker override (local dev only)
 docker-compose.override.yml
+
+API KEYS
+auth_err.txt
+auth_out.txt
+auth_logs.txt
