@@ -1,0 +1,134 @@
+# Antigravity SAST Pipeline — Semgrep + CodeQL
+# Runs on every PR to main and on pushes to main
+# Blocks PHI-exposing code, IDOR vulnerabilities, and pgp_sym_encrypt() misuse
+
+name: SAST Security Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  # ===================================================
+  # Job 1: Semgrep SAST with custom Antigravity rules
+  # ===================================================
+  semgrep:
+    name: Semgrep HIPAA/PHI Scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep with custom rules
+        run: |
+          semgrep scan \
+            --config .github/semgrep-rules/ \
+            --config p/hipaa \
+            --error \
+            --json \
+            --output semgrep-results.json \
+            --verbose
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload Semgrep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+
+      - name: Fail on findings
+        if: failure()
+        run: |
+          echo "::error::Semgrep found security violations. Check the semgrep-results artifact for details."
+          echo "Common causes:"
+          echo "  1. Raw plaintext PHI variable names in Server Actions"
+          echo "  2. Direct DB access bypassing auth.uid() validation"
+          echo "  3. pgp_sym_encrypt() called on complaint_phi columns"
+          exit 1
+
+  # ===================================================
+  # Job 2: CodeQL IDOR Scanning
+  # ===================================================
+  codeql:
+    name: CodeQL IDOR Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+          config: |
+            paths:
+              - 'app/'
+              - 'src/'
+              - 'lib/'
+            paths-ignore:
+              - 'node_modules/'
+              - '**/*.test.ts'
+              - '**/*.test.tsx'
+              - '**/*.spec.ts'
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
+          output: codeql-results
+
+      - name: Upload CodeQL results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-results
+          path: codeql-results
+
+  # ===================================================
+  # Job 3: SQL Migration Lint
+  # ===================================================
+  sql-lint:
+    name: SQL Migration Safety Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for plaintext PHI in migrations
+        run: |
+          echo "Scanning SQL migrations for plaintext PHI patterns..."
+          VIOLATIONS=0
+
+          # Check for pgp_sym_encrypt on complaint_phi columns
+          if grep -rni "pgp_sym_encrypt" supabase/docker/volumes/db/migrations/; then
+            echo "::error::BLOCKED: pgp_sym_encrypt() found in migrations. PHI must use ALE (application-level encryption) only."
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # Check for TEXT/VARCHAR on known PHI columns (should be BYTEA)
+          if grep -rniE "(description|reporter_name|reporter_contact)\s+(TEXT|VARCHAR|CHARACTER)" supabase/docker/volumes/db/migrations/008_complaint_phi.sql; then
+            echo "::error::BLOCKED: PHI columns in complaint_phi must be BYTEA, not TEXT/VARCHAR."
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          if [ $VIOLATIONS -gt 0 ]; then
+            echo "Found $VIOLATIONS violation(s). PR blocked."
+            exit 1
+          fi
+
+          echo "✅ All SQL migration checks passed."

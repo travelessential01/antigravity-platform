@@ -1,0 +1,55 @@
+# =================================
+# Antigravity — .gitignore
+# =================================
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+.next/
+out/
+dist/
+build/
+
+# Environment & Secrets (NEVER commit)
+.env
+.env.local
+.env.*.local
+*.pem
+credentials.json
+token.json
+
+# Supabase Docker volumes (data, not config)
+supabase/docker/volumes/db/data/
+C:/supabase-volumes/
+
+# Temporary & intermediate files
+.tmp/
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Storybook
+storybook-static/
+
+# PWA
+sw.js
+workbox-*.js
+
+# Docker override (local dev only)
+docker-compose.override.yml

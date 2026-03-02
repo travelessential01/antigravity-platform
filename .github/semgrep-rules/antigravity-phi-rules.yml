@@ -1,0 +1,174 @@
+# Antigravity Custom Semgrep Rules
+# HIPAA/PHI protection for healthcare grievance platform
+# These rules are referenced by .github/workflows/sast-pipeline.yml
+
+rules:
+  # =============================================================
+  # Rule 1: Block pgp_sym_encrypt() on complaint_phi columns
+  # PHI must use Application-Level Encryption (ALE) only
+  # =============================================================
+  - id: antigravity-no-pgcrypto-phi
+    patterns:
+      - pattern: pgp_sym_encrypt(...)
+    message: |
+      BLOCKED: pgp_sym_encrypt() detected. PHI columns in complaint_phi
+      must use Application-Level Encryption (AES-256-GCM) in Next.js
+      Server Actions only. The database must store BYTEA ciphertext only.
+      See: Migration 008 and directive Task 1.1.
+    languages: [generic]
+    severity: ERROR
+    metadata:
+      category: security
+      technology: [postgresql]
+      compliance: [hipaa, dpdp]
+      cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
+
+  # =============================================================
+  # Rule 2: Block raw plaintext PHI variable names in Server Actions
+  # =============================================================
+  - id: antigravity-no-plaintext-phi-vars
+    patterns:
+      - pattern-either:
+          - pattern: |
+              const $PATIENT_NAME = $EXPR
+          - pattern: |
+              let $PATIENT_NAME = $EXPR
+          - pattern: |
+              var $PATIENT_NAME = $EXPR
+      - metavariable-regex:
+          metavariable: $PATIENT_NAME
+          regex: "(patientName|patient_name|reporterName|reporter_name|reporterContact|reporter_contact|patientPhone|patient_phone|patientEmail|patient_email|patientAddress|patient_address|plaintextPhi|plaintext_phi|decryptedPhi|phi_plaintext)"
+    message: |
+      BLOCKED: Raw plaintext PHI variable name detected ('$PATIENT_NAME').
+      PHI must never be stored in plaintext variables that could be logged
+      or cached. Use opaque variable names and ensure plaintext is never
+      persisted beyond the immediate decryption scope.
+      See: Task 2.4 ALE PHI Access Pattern.
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      compliance: [hipaa, dpdp]
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+
+  # =============================================================
+  # Rule 3: Block direct DB access bypassing auth.uid() validation
+  # Every Server Action must validate auth before DB operations
+  # =============================================================
+  - id: antigravity-require-auth-before-db
+    patterns:
+      - pattern: |
+          async function $FUNC(...) {
+            ...
+            $CLIENT.from($TABLE).$METHOD(...)
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            ...
+            auth.uid()
+            ...
+            $CLIENT.from($TABLE).$METHOD(...)
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            ...
+            getUser()
+            ...
+            $CLIENT.from($TABLE).$METHOD(...)
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            ...
+            supabase.auth.getUser()
+            ...
+            $CLIENT.from($TABLE).$METHOD(...)
+            ...
+          }
+    message: |
+      BLOCKED: Database operation detected without prior auth.uid() or
+      getUser() validation. Every Server Action must authenticate the
+      user before any database read/write.
+      See: Task 2.4 — Server Action Security.
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      compliance: [hipaa]
+      cwe: ["CWE-862: Missing Authorization"]
+
+  # =============================================================
+  # Rule 4: Block Server Actions returning decrypted PHI without
+  #          department claim verification
+  # =============================================================
+  - id: antigravity-phi-without-dept-check
+    patterns:
+      - pattern: |
+          ...complaint_phi...
+      - pattern-not: |
+          ...department_id...
+          ...complaint_phi...
+      - pattern-not: |
+          ...departmentId...
+          ...complaint_phi...
+    message: |
+      WARNING: complaint_phi access detected without department_id claim
+      validation. Server Actions accessing PHI must validate the JWT
+      department claim against complaints.department_id BEFORE ALE
+      decryption. See: Task 2.4 ALE PHI Access Pattern.
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      compliance: [hipaa, dpdp]
+      cwe: ["CWE-863: Incorrect Authorization"]
+
+  # =============================================================
+  # Rule 5: Block raw JWT storage in localStorage/IndexedDB
+  # =============================================================
+  - id: antigravity-no-raw-jwt-storage
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($KEY, $JWT)
+          - pattern: sessionStorage.setItem($KEY, $JWT)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ".*(token|jwt|session|access_token|refresh_token).*"
+    message: |
+      BLOCKED: Raw JWT/token storage in localStorage/sessionStorage detected.
+      JWTs must be encrypted with AES-GCM via Web Crypto API before storing
+      in IndexedDB. Raw Base64 JWT storage is PROHIBITED.
+      See: Task 2.2 — Offline JWT Caching.
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      compliance: [hipaa]
+      cwe: ["CWE-922: Insecure Storage of Sensitive Information"]
+
+  # =============================================================
+  # Rule 6: Block console.log of PHI-related data
+  # =============================================================
+  - id: antigravity-no-log-phi
+    patterns:
+      - pattern-either:
+          - pattern: console.log(..., $PHI, ...)
+          - pattern: console.info(..., $PHI, ...)
+          - pattern: console.debug(..., $PHI, ...)
+          - pattern: console.warn(..., $PHI, ...)
+      - metavariable-regex:
+          metavariable: $PHI
+          regex: ".*(phi|description|reporter|patient|complaint_phi|decrypted).*"
+    message: |
+      BLOCKED: Potential PHI logging detected. Never log decrypted PHI,
+      patient names, reporter contacts, or complaint descriptions to
+      console. PHI plaintext must never be persisted beyond the immediate
+      decryption scope. See: HIPAA Minimum Necessary principle.
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      compliance: [hipaa, dpdp]
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
