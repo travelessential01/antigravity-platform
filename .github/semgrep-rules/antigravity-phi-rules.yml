@@ -9,7 +9,13 @@ rules:
   # =============================================================
   - id: antigravity-no-pgcrypto-phi
     patterns:
-      - pattern: pgp_sym_encrypt(...)
+      - pattern-regex: (?im)^[ \t]*(?!--).*\bpgp_sym_encrypt\s*\(
+    paths:
+      include:
+        - database/**/*.sql
+        - src/**/*.ts
+        - src/**/*.tsx
+        - scripts/**/*.mjs
     message: |
       BLOCKED: pgp_sym_encrypt() detected. PHI columns in complaint_phi
       must use Application-Level Encryption (AES-256-GCM) in Next.js

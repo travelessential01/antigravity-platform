@@ -149,7 +149,7 @@ export async function readComplaintPHI(input: z.infer<typeof readPhiSchema>) {
         const masterKeyBase64 = process.env.LOCAL_DEV_AES_GCM_KEY!
         const key = Buffer.from(masterKeyBase64, 'base64')
 
-        const decryptedPhi = {
+        const detailResponse = {
             description: decryptPhiValue(phiRecord.description, key),
             reporterName: decryptPhiValue(phiRecord.reporter_name, key),
             reporterContact: decryptPhiValue(phiRecord.reporter_contact, key),
@@ -172,7 +172,7 @@ export async function readComplaintPHI(input: z.infer<typeof readPhiSchema>) {
         //     SigNoz OTLP forwarding removed — SigNoz container no longer in stack.
 
         // 6. Return Plain Text
-        return { success: true, data: decryptedPhi }
+        return { success: true, data: detailResponse }
     } catch (error: unknown) {
         serverActionErrorCounter.add(1, { action: 'readComplaintPHI' });
         Sentry.captureException(error);

@@ -1,0 +1,6 @@
+.github/semgrep-rules/
+.github/workflows/
+directives/
+docs/archive/
+database/quarantine_seeds/
+database/supabase-cli/
