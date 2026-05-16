@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   PNPM_VERSION: '9'
   # Stub env vars so next build doesn't fail on missing runtime config
   NEXT_PUBLIC_SUPABASE_URL: http://localhost:8000
@@ -254,7 +254,7 @@ jobs:
       - name: Verify migration file ordering
         run: |
           echo "Checking SQL migration file naming sequence..."
-          MIGRATION_DIR="database"
+          MIGRATION_DIR="database/migrations"
 
           if [ ! -d "$MIGRATION_DIR" ]; then
             echo "::notice::No database/ directory found — skipping migration validation"
