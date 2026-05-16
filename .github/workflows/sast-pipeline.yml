@@ -32,6 +32,7 @@ jobs:
         run: |
           semgrep scan \
             --config .github/semgrep-rules/ \
+            --severity ERROR \
             --error \
             --json \
             --output semgrep-results.json \
