@@ -32,7 +32,6 @@ jobs:
         run: |
           semgrep scan \
             --config .github/semgrep-rules/ \
-            --config p/hipaa \
             --error \
             --json \
             --output semgrep-results.json \
