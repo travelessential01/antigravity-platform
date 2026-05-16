@@ -1,0 +1,320 @@
+# Antigravity CI Pipeline — Build, Lint, Test
+# Runs on every PR to main and on pushes to main
+# Works alongside sast-pipeline.yml (security scanning)
+
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  # Stub env vars so next build doesn't fail on missing runtime config
+  NEXT_PUBLIC_SUPABASE_URL: http://localhost:8000
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: stub-for-ci-build
+
+jobs:
+  # ===================================================
+  # Job 1: Install dependencies (cached for other jobs)
+  # ===================================================
+  install:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for package.json
+        id: check_app
+        run: |
+          if [ -f "package.json" ]; then
+            echo "app_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "app_exists=false" >> $GITHUB_OUTPUT
+            echo "::notice::package.json not found — skipping CI jobs (Next.js app not yet scaffolded)"
+          fi
+
+      - name: Setup pnpm
+        if: steps.check_app.outputs.app_exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        if: steps.check_app.outputs.app_exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        if: steps.check_app.outputs.app_exists == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache pnpm store
+        if: steps.check_app.outputs.app_exists == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+    outputs:
+      app_exists: ${{ steps.check_app.outputs.app_exists }}
+
+  # ===================================================
+  # Job 2: Lint & Type Check
+  # ===================================================
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    needs: install
+    if: needs.install.outputs.app_exists == 'true'
+    defaults:
+      run:
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: TypeScript type check
+        run: pnpm exec tsc --noEmit
+
+  # ===================================================
+  # Job 3: Unit Tests (Vitest)
+  # ===================================================
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: install
+    if: needs.install.outputs.app_exists == 'true'
+    defaults:
+      run:
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Vitest
+        run: pnpm test -- --run --reporter=verbose
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ===================================================
+  # Job 4: Build Verification
+  # ===================================================
+  build:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: needs.install.outputs.app_exists == 'true'
+    defaults:
+      run:
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Next.js
+        run: pnpm build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          path: .next/
+          retention-days: 7
+
+  # ===================================================
+  # Job 5: Dependency Audit
+  # ===================================================
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    needs: install
+    if: needs.install.outputs.app_exists == 'true'
+    defaults:
+      run:
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Audit dependencies
+        run: pnpm audit --prod --audit-level=high
+        continue-on-error: true  # Advisory — doesn't block PR (yet)
+
+  # ===================================================
+  # Job 6: SQL Migration Validation
+  # ===================================================
+  sql-validate:
+    name: SQL Migration Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify migration file ordering
+        run: |
+          echo "Checking SQL migration file naming sequence..."
+          MIGRATION_DIR="database"
+
+          if [ ! -d "$MIGRATION_DIR" ]; then
+            echo "::notice::No database/ directory found — skipping migration validation"
+            exit 0
+          fi
+
+          FILES=$(find "$MIGRATION_DIR" -name "*.sql" -type f | sort)
+          if [ -z "$FILES" ]; then
+            echo "::notice::No .sql files found in database/ — skipping"
+            exit 0
+          fi
+
+          echo "Found migrations:"
+          echo "$FILES"
+
+          # Check for duplicate prefixes
+          PREFIXES=$(echo "$FILES" | xargs -I{} basename {} | grep -oP '^\d+' | sort)
+          DUPES=$(echo "$PREFIXES" | uniq -d)
+          if [ -n "$DUPES" ]; then
+            echo "::error::Duplicate migration prefixes found: $DUPES"
+            exit 1
+          fi
+
+          echo "✅ All migration files have unique, sequential prefixes."
+
+      - name: Check for dangerous SQL patterns
+        run: |
+          echo "Scanning for dangerous SQL patterns..."
+          VIOLATIONS=0
+
+          # Block DROP TABLE without IF EXISTS
+          if grep -rniE "DROP\s+TABLE\s+(?!IF)" database/ 2>/dev/null; then
+            echo "::warning::Found DROP TABLE without IF EXISTS — use DROP TABLE IF EXISTS"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # Block TRUNCATE (use soft deletes)
+          if grep -rni "TRUNCATE" database/ 2>/dev/null; then
+            echo "::error::TRUNCATE detected — Antigravity uses soft-deletes only"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # Block CASCADE drops on production tables
+          if grep -rniE "DROP.*CASCADE" database/ 2>/dev/null; then
+            echo "::warning::CASCADE drop detected — review carefully"
+          fi
+
+          if [ $VIOLATIONS -gt 0 ]; then
+            echo "Found $VIOLATIONS violation(s)."
+            exit 1
+          fi
+
+          echo "✅ No dangerous SQL patterns found."

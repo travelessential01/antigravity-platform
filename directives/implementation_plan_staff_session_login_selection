@@ -1,0 +1,178 @@
+# Multi-Department Staff Assignment (Session Context)
+
+Enable staff members (e.g., float managers, nursing supervisors) to be authorized for multiple departments and select which department they are covering at login time. This replaces the current 1:1 user→department relationship with a many-to-many model + session-based department selection.
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Breaking Change to `users.department_id`**: The existing `department_id` column on the `users` table will be retained as the **"primary/home department"** (backward-compatible), but it will no longer be the sole source of truth for authorization. A new `user_departments` junction table becomes the authoritative source.
+
+> [!WARNING]
+> **JWT Claims Impact**: The `department_id` claim currently baked into the JWT (used by RLS policies) will need to be set dynamically at login time based on the department the user selects. This requires updating how `app_metadata.department_id` is set during session establishment.
+
+---
+
+## Proposed Changes
+
+### Component 1: Database Schema
+
+#### [NEW] [025_user_departments.sql](file:///c:/Application%20V4.0/database/migrations/025_user_departments.sql)
+
+Creates the many-to-many junction table and migrates existing data:
+
+```sql
+-- Junction table: user_departments
+CREATE TABLE public.user_departments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID NOT NULL REFERENCES public.users(id),
+    department_id UUID NOT NULL REFERENCES public.departments(id),
+    is_primary    BOOLEAN NOT NULL DEFAULT false,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, department_id)  -- prevent duplicate assignments
+);
+
+-- Indexes
+CREATE INDEX idx_user_departments_user ON public.user_departments(user_id);
+CREATE INDEX idx_user_departments_dept ON public.user_departments(department_id);
+
+-- Migrate existing user→department relationships
+INSERT INTO public.user_departments (user_id, department_id, is_primary)
+SELECT id, department_id, true
+FROM public.users
+WHERE department_id IS NOT NULL
+ON CONFLICT DO NOTHING;
+
+-- RLS
+ALTER TABLE public.user_departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_departments FORCE ROW LEVEL SECURITY;
+
+-- Same-hospital users can see department assignments
+CREATE POLICY user_depts_select ON public.user_departments
+    FOR SELECT TO authenticated
+    USING (
+        EXISTS (
+            SELECT 1 FROM public.users u
+            WHERE u.id = user_departments.user_id
+              AND u.hospital_id = public.get_my_hospital_id()
+        )
+    );
+
+-- Only admins can manage assignments
+CREATE POLICY user_depts_manage ON public.user_departments
+    FOR ALL TO authenticated
+    USING (
+        public.get_my_role() IN ('admin', 'medical_superintendent')
+    );
+```
+
+---
+
+### Component 2: Department Selection API
+
+#### [NEW] [src/app/api/session/select-department/route.ts](file:///c:/Application%20V4.0/src/app/api/session/select-department/route.ts)
+
+New API endpoint called after login (or from a department switcher). It:
+1. Validates the user is authorized for the requested department (checks `user_departments`)
+2. Updates `auth.users.app_metadata.department_id` to the selected department UUID
+3. Refreshes the session so the new JWT contains the updated `department_id` claim
+
+```
+POST /api/session/select-department
+Body: { "departmentId": "uuid" }
+```
+
+This is the **key mechanism**: by updating `app_metadata.department_id` at session time, all existing RLS policies (`get_my_department_id()`) continue to work without modification.
+
+---
+
+### Component 3: Department Selector UI
+
+#### [NEW] [src/components/auth/department-selector.tsx](file:///c:/Application%20V4.0/src/components/auth/department-selector.tsx)
+
+A modal/page shown after login when a user has multiple department assignments. Displays a list of their authorized departments and lets them pick one for this session.
+
+- Fetches from `user_departments` joined with `departments` to show department names
+- Calls the `/api/session/select-department` endpoint on selection
+- Redirects to `/dashboard` on success
+- If user has only one department, auto-selects and skips the UI
+
+#### [MODIFY] [src/app/auth/callback/route.ts](file:///c:/Application%20V4.0/src/app/auth/callback/route.ts)
+
+After SSO callback completes, check if user has multiple departments. If yes, redirect to `/auth/select-department` instead of directly to `/dashboard`.
+
+#### [NEW] [src/app/auth/select-department/page.tsx](file:///c:/Application%20V4.0/src/app/auth/select-department/page.tsx)
+
+Page wrapper that renders the `DepartmentSelector` component.
+
+---
+
+### Component 4: Middleware Update
+
+#### [MODIFY] [src/middleware.ts](file:///c:/Application%20V4.0/src/middleware.ts)
+
+Add a check: if the user is a `department_manager` and their `app_metadata.department_id` is missing/null, redirect them to `/auth/select-department` before allowing access to `/dashboard`.
+
+---
+
+### Component 5: Admin Panel — User Department Management
+
+#### [NEW] [src/app/(admin)/user-management/page.tsx](file:///c:/Application%20V4.0/src/app/(admin)/user-management/page.tsx)
+
+Admin UI to:
+- View all staff at the hospital
+- Assign/remove departments for a user (many-to-many)
+- Set the primary department
+- This replaces the need to manually edit the single `department_id` column
+
+---
+
+### Component 6: Staff Dashboard — Department Switcher
+
+#### [MODIFY] [src/app/(staff)/dashboard/page.tsx](file:///c:/Application%20V4.0/src/app/(staff)/dashboard/page.tsx)
+
+Add a small "Switch Department" dropdown in the dashboard header. When clicked, it calls the `/api/session/select-department` endpoint and refreshes the page so RLS filters update to the new department context.
+
+---
+
+## Summary of All Touchpoints
+
+| Layer | File | Change Type | What Changes |
+|-------|------|-------------|--------------|
+| **Database** | `025_user_departments.sql` | NEW | Junction table + data migration + RLS |
+| **API** | `api/session/select-department/route.ts` | NEW | Updates JWT `department_id` claim |
+| **Auth Flow** | `auth/callback/route.ts` | MODIFY | Redirect multi-dept users to selector |
+| **Auth Flow** | `auth/select-department/page.tsx` | NEW | Department selection page |
+| **UI Component** | `components/auth/department-selector.tsx` | NEW | Department picker UI |
+| **Middleware** | `middleware.ts` | MODIFY | Guard: require dept selection |
+| **Admin** | `(admin)/user-management/page.tsx` | NEW | Admin UI for dept assignments |
+| **Dashboard** | `(staff)/dashboard/page.tsx` | MODIFY | In-session department switcher |
+
+> [!NOTE]
+> **Zero RLS Changes Required**: Because this design updates `app_metadata.department_id` dynamically at session time, the existing `get_my_department_id()` RLS helper function and **all 8+ RLS policies** that use it continue to work unchanged. This is the key architectural advantage of Option 2.
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Q1: Should the department switcher require re-authentication (MFA challenge)?**
+> Switching departments mid-session could be considered a privilege change. Should we require a TOTP re-challenge when switching, or is it acceptable to switch freely within the same session?
+
+> [!IMPORTANT]
+> **Q2: Audit trail for department switches?**
+> Should every department switch be logged to `local_audit_reads` or `audit_logs` for compliance? (Recommended: Yes — log who switched to which department and when.)
+
+---
+
+## Verification Plan
+
+### Automated Tests
+1. **Migration test**: Run `025_user_departments.sql` against the local Supabase DB and verify the junction table is created with migrated data
+2. **API test**: `curl` the `/api/session/select-department` endpoint and verify `app_metadata.department_id` updates
+3. **RLS test**: Verify a department_manager can only see complaints for their *selected* department, not all departments they're authorized for
+
+### Manual Verification
+1. Log in as a multi-department user → verify the department selector appears
+2. Select "Cardiology" → verify dashboard shows only Cardiology complaints
+3. Use the dashboard switcher to change to "Emergency" → verify dashboard updates
+4. Admin panel: assign a new department to a user → verify it appears in their selector

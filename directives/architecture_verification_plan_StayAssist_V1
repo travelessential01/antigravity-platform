@@ -1,0 +1,192 @@
+# StayAssist V1 — Architecture Verification Plan
+
+Exact test commands, expected output, and pass/fail criteria for every task.
+
+---
+
+## Sprint A Verification
+
+### A.1: Redis Isolation
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Container running | `docker ps --filter name=stayassist-redis` | Shows `stayassist-redis`, status `Up`, port `6380->6379` |
+| 2 | Auth works | `docker exec stayassist-redis redis-cli -a $REDIS_PASSWORD ping` | Returns `PONG` |
+| 3 | App connects | Submit complaint via intake form → check server logs | No Redis connection errors |
+| 4 | Isolation test | Stop Authentik Redis → submit complaint | Complaint submits (StayAssist Redis unaffected) |
+| 5 | Fail-open test | Stop `stayassist-redis` → submit complaint | Complaint submits + console warns about connection error |
+| 6 | Rate limit works | Submit 3 complaints in <60s with same mobile | Third complaint returns `Rate limit exceeded` |
+
+---
+
+### A.2: Centralized Auth Guard
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | File exists | `ls src/lib/auth-guard.ts` | File found |
+| 2 | Exports correct | `grep "export.*requireUser\|requireRole\|requireMfa\|requirePrivileged" src/lib/auth-guard.ts` | All 4 guards exported |
+| 3 | is_active column | `psql -c "SELECT column_name, data_type, column_default FROM information_schema.columns WHERE table_name='users' AND column_name='is_active'"` | Returns `is_active \| boolean \| true` |
+| 4 | Active user access | Login as active staff → invoke `readComplaintPHI` | PHI decrypts correctly |
+| 5 | Deactivated blocked | `UPDATE public.users SET is_active = false WHERE id = '<test_id>'` → invoke `readComplaintPHI` | Returns `Account deactivated` |
+| 6 | Role enforcement | Login as non-Admin → call `updateSlaConfig` | Returns `Forbidden` error |
+| 7 | No raw getSession | `grep -r "supabase.auth.getSession" src/actions/` | Zero matches (all replaced by auth-guard calls) |
+| 8 | JWT expiry set | `grep JWT_EXPIRY .env` | Returns `1800` |
+
+---
+
+### A.3: OTEL Stripped
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | No packages | `pnpm ls @opentelemetry/api 2>&1` | Not found |
+| 2 | No imports | `grep -r "@opentelemetry" src/` | Zero results |
+| 3 | otel-node-sdk deleted | `ls src/lib/otel-node-sdk.ts` | File not found |
+| 4 | monitoring-test deleted | `ls src/app/api/monitoring-test/route.ts` | File not found |
+| 5 | instrumentation clean | `cat src/instrumentation.ts` | No `otel-node-sdk` import |
+| 6 | Build succeeds | `pnpm build 2>&1 \| grep -i opentelemetry` | Zero matches |
+| 7 | Actions work | Submit complaint + View PHI + Update SLA | All succeed |
+
+---
+
+### A.4: Offline-Sync Removed
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Files deleted | `ls src/lib/offline-sync.ts src/lib/indexeddb-schema.ts src/store/useOfflineQueueStore.ts src/store/useCrdtStore.ts 2>&1` | All "not found" |
+| 2 | No references | `grep -r "useOfflineQueueStore\|useCrdtStore\|resolveComplaintLocally" src/` | Zero results |
+| 3 | Packages removed | `pnpm ls next-pwa y-supabase yjs y-indexeddb 2>&1` | All "not found" |
+| 4 | next.config clean | `grep -c "next-pwa\|withPWA" next.config.mjs` | Returns `0` |
+| 5 | IntakeForm online-only | Submit complaint via intake form | No "QUEUED-OFFLINE", no "Offline Mode Active" banner |
+| 6 | Build succeeds | `pnpm build 2>&1 \| grep -i "pwa\|yjs\|offline"` | Zero matches |
+
+---
+
+### A.5: Login Cookie Synthesis Fixed
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | No document.cookie | `grep -c "document.cookie" src/app/login/page.tsx` | Returns `0` |
+| 2 | No 400-day max-age | `grep -c "34560000" src/app/login/page.tsx` | Returns `0` |
+| 3 | PKCE redirect | `grep "auth/callback" src/app/login/page.tsx` | Match found for redirectTo |
+| 4 | httpOnly cookies | Login via SSO → DevTools → Application → Cookies | Auth cookies have `HttpOnly` flag |
+| 5 | Login E2E | Click SSO button → complete Authentik login → verify redirect to dashboard | Successful login without console errors |
+
+---
+
+### A.6: SSO Config Parameterized
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | No hardcoded UUID | `grep -c "0bafa784" src/app/login/page.tsx` | Returns `0` |
+| 2 | No hardcoded localhost | `grep -c "localhost:3000" src/app/login/page.tsx` | Returns `0` |
+| 3 | Env vars set | `grep "NEXT_PUBLIC_SSO_PROVIDER_ID\|NEXT_PUBLIC_SITE_URL" .env` | Both present |
+
+---
+
+### A.7: Protected Route Group Layouts
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Admin layout exists | `ls src/app/(admin)/layout.tsx` | File found |
+| 2 | DPO layout exists | `ls src/app/(dpo)/layout.tsx` | File found |
+| 3 | Staff layout exists | `ls src/app/(staff)/layout.tsx` | File found |
+| 4 | Unauthenticated → admin | Navigate to `/org-dashboard` without session | Blocked (error/redirect) |
+| 5 | Non-Admin → admin | Login as non-Admin → navigate `/org-dashboard` | Returns role error |
+| 6 | Non-DPO → investigator | Login as non-DPO (without MFA) → navigate `/investigator` | Returns MFA/role error |
+
+---
+
+### A.8: API Route Security
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Hospitals protected | `curl -s http://localhost:3000/api/hospitals` | Returns 401 Unauthorized |
+| 2 | Hospitals with auth | `curl -H "Cookie: <valid_admin_cookie>" http://localhost:3000/api/hospitals` | Returns hospital list |
+| 3 | FAQs GET public | `curl -s http://localhost:3000/api/faqs` | Returns FAQs (no auth needed) |
+| 4 | FAQs POST blocked | `curl -s -X POST http://localhost:3000/api/faqs -d '{"question":"test","answer":"test"}'` | Returns 401 |
+| 5 | FAQs PUT blocked | `curl -s -X PUT http://localhost:3000/api/faqs -d '{"id":"test"}'` | Returns 401 |
+| 6 | FAQs DELETE blocked | `curl -s -X DELETE http://localhost:3000/api/faqs?id=test` | Returns 401 |
+
+---
+
+### A.9: Service-Role Removed from Render Paths
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | No service-role in org-dashboard | `grep -c "SERVICE_ROLE_KEY" src/app/(admin)/org-dashboard/page.tsx` | Returns `0` |
+| 2 | Uses auth client | `grep "createAuthenticatedClient" src/app/(admin)/org-dashboard/page.tsx` | Match found |
+| 3 | Widget exception documented | `grep -c "acceptable exception" src/components/widgets/ssr-transparency-widget.tsx` | Returns `1` |
+| 4 | Unauthenticated rendering | Open org-dashboard page without auth | Blocked by layout guard, not rendered |
+
+---
+
+## Sprint B Verification
+
+### B.1: FK Constraint Dropped
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | FK gone | `psql -c "SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='complaints' AND constraint_name LIKE '%patient%fkey%'"` | Zero rows |
+| 2 | CHECK exists | `psql -c "SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='complaints' AND constraint_name='patient_id_uuid_format'"` | Returns `patient_id_uuid_format` |
+| 3 | Valid UUID | Insert with anonymous UUID → `RETURNING id` | Returns new ID |
+| 4 | Invalid blocked | Insert with `'not-a-uuid'` | CHECK violation error |
+
+---
+
+### B.2: Key Versioning
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Column exists | `psql -c "SELECT column_name FROM information_schema.columns WHERE table_name='complaint_phi' AND column_name='key_version'"` | Returns `key_version` |
+| 2 | New record tagged | Submit complaint → check `SELECT key_version FROM complaint_phi ORDER BY created_at DESC LIMIT 1` | Returns `1` |
+| 3 | Decryption works | View PHI for new complaint | Decrypts correctly |
+
+---
+
+### B.3: Server-Side Resolution
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Action exists | `grep "export async function resolveComplaint" src/actions/complaints.ts` | Match found |
+| 2 | Uses auth-guard | `grep "requireUser\|requireRole" src/actions/complaints.ts` | Match found in resolveComplaint |
+| 3 | DB updated | Click Resolve → `SELECT status FROM complaints WHERE id=?` | Returns `resolved` |
+| 4 | Audit ledger | `SELECT * FROM complaint_status_history WHERE complaint_id=? ORDER BY created_at DESC LIMIT 1` | Shows `resolved` transition |
+| 5 | Persistence | Refresh page | Still shows resolved |
+| 6 | Auth guard | Invoke without session | Returns `Unauthorized` |
+| 7 | Active guard | Deactivated staff clicks Resolve | Returns `Account deactivated` |
+
+---
+
+## Sprint C Verification
+
+### C.1: Mock OTP
+
+| # | Test | Pass Criteria |
+|:--|:-----|:--------------|
+| 1 | Enter `0000` | Patient verified |
+| 2 | Enter `1234` | Alert: "Invalid mock OTP" |
+
+### C.2: Secrets Scaffold
+
+| # | Test | Pass Criteria |
+|:--|:-----|:--------------|
+| 1 | `ls src/lib/aws-secrets.ts` | File found |
+| 2 | `grep USE_AWS_SECRETS src/lib/aws-secrets.ts` | Fallback to `process.env` |
+| 3 | `cat .env.example` | Lists all keys |
+
+---
+
+## Final Build Gate
+
+| # | Test | Command / Action | Pass Criteria |
+|:--|:-----|:-----------------|:--------------|
+| 1 | Clean install | `rm -rf node_modules && pnpm install` | Zero deprecated package warnings |
+| 2 | Production build | `pnpm build` | Exit code 0, zero errors |
+| 3 | No stripped packages | `grep -r "@opentelemetry\|y-supabase\|next-pwa" node_modules/.package-lock.json` | Zero results |
+| 4 | No raw getSession in actions | `grep -rn "supabase.auth.getSession" src/actions/` | Zero matches |
+| 5 | No document.cookie in login | `grep -c "document.cookie" src/app/login/page.tsx` | Returns `0` |
+| 6 | No hardcoded SSO UUID | `grep -c "0bafa784" src/` | Returns `0` |
+| 7 | No service-role on render paths | `grep -rn "SERVICE_ROLE_KEY" src/app/\(admin\)/` | Zero matches (excluding ssr-transparency-widget) |
+| 8 | All layout guards exist | `ls src/app/(admin)/layout.tsx src/app/(dpo)/layout.tsx src/app/(staff)/layout.tsx` | All 3 found |
+| 9 | E2E happy path | QR → OTP → submit → staff login → view → resolve → verify DB | Complete flow works |
+| 10 | E2E auth governance | Deactivate user → attempt PHI → attempt admin page → attempt API | All blocked |

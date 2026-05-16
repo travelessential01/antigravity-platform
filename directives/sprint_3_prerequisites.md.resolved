@@ -1,0 +1,31 @@
+# Sprint 3 Prerequisites Checklist
+
+Before development begins on **Sprint 3: Complaint Intake, SLA & Workflow Engine**, the active developer and project manager must ensure the following dependencies are fully resolved.
+
+---
+
+### Phase 1: Infrastructure & API Dependencies
+*   [ ] **Inngest Cloud Account Provisioning:**
+    *   *Requirement:* A free-tier Inngest account must be provisioned.
+    *   *Action:* Generate an `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`.
+    *   *Purpose:* Inngest is the mandatory O(1) event-driven queue that strictly replaces cron-polling for exact SLA deadline triggering.
+*   [ ] **Inngest Local Development Tunnel:**
+    *   *Requirement:* Ensure the `npx inngest-cli dev` tunnel is confirmed working against `localhost:3000/api/inngest` before writing the routing functions.
+*   [ ] **Offline Database Resolution Framework (Yjs):**
+    *   *Requirement:* Confirm the `yjs` and `y-indexeddb` libraries are approved for deployment.
+    *   *Purpose:* The directive mandates CRDT (Conflict-free Replicated Data Type) architecture for offline staff dashboard syncing.
+
+### Phase 2: Design & Asset Dependencies
+*   [ ] **QR Code Asset Stubbing (Local):**
+    *   *Requirement:* Generate a generic static QR code asset that resolves to `http://localhost:3000/patient/intake?hospital_id=<MOCK_HOSPITAL_UUID>`.
+    *   *Purpose:* To fulfill the *Physical-to-Digital Bridge* testing mandate for bedside patient intake simulations.
+*   [ ] **Next-PWA Module:**
+    *   *Requirement:* Install and configure `@ducanh2912/next-pwa` (or equivalent App Router compatible PWA library) to handle the absolute Service Worker caching rules for the `/(patient)/intake` route segment.
+
+### Phase 3: Developer Environment Overrides
+*   [ ] **OTP Bypass Toggle Maintenance:**
+    *   *Requirement:* Ensure the local OTP Testing Bypass (established in Sprint 2) remains active for Sprint 3.
+    *   *Validation:* Patient provisions must correctly bypass Twilio/SMS until explicitly mandated for production integration in Sprint 7.
+*   [ ] **Local PostGIS / `pg_trgm` Activation:**
+    *   *Requirement:* Execute `CREATE EXTENSION IF NOT EXISTS pg_trgm;` on the local Supabase container.
+    *   *Purpose:* The duplicate detection logic (Task 3.2) explicitly relies on PostgreSQL trigram similarity computations.

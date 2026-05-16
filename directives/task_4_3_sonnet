@@ -1,0 +1,31 @@
+# Task 4.3 — Multi-Channel Notification Engine
+
+## Files to Create / Modify
+
+### SMS Provider Stubs (new)
+- [ ] `src/lib/sms-provider.ts` — abstract `SmsProvider` interface + `MockSmsProvider` + `Msg91SmsProvider` + `TwilioSmsProvider` stubs
+
+### Supabase Edge Functions (new)
+- [ ] `supabase/functions/on-complaint-created/index.ts`
+- [ ] `supabase/functions/on-sla-breach/index.ts`
+- [ ] `supabase/functions/nightly-compliance-audit/index.ts`
+
+### Next.js API (new)
+- [ ] `src/lib/rate-limit-acknowledge.ts` — Redis token bucket, 5 req/min
+- [ ] `src/app/api/acknowledge/route.ts` — deep-link acknowledgment POST handler
+
+### Inngest Event Schema (modify)
+- [ ] [src/inngest/client.ts](file:///c:/Application%20V4.0/src/inngest/client.ts) — add `sla/breach-notification-sent` event type
+
+### Environment (modify)
+- [ ] `.env` — add stub SMS env vars (empty, commented)
+
+### Task Artifact (modify)
+- [ ] [directives/task_4.3.md](file:///c:/Application%20V4.0/directives/task_4.3.md) — update status + verification checklist
+
+## Verification
+- [ ] TypeScript build passes: `pnpm run build` (no type errors)
+- [ ] `MockSmsProvider` smoke test: POST to `/api/acknowledge` with stub token → `200`
+- [ ] Replay protection test: POST same token again → `403`
+- [ ] Rate limit test: POST 6× in a loop → 6th returns `429`
+- [ ] Edge Function container check: `supabase functions list` (or `deno check` on each file)

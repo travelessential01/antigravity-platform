@@ -1,0 +1,40 @@
+# Task 4.1: Zero-PHI Quality Dashboard & Staff Offline Resilience
+
+**Owner:** Frontend Architect | **Risk:** MEDIUM | **Sprint:** 4
+
+---
+
+## Sub-Tasks
+
+### A. TanStack DataTable
+- [x] Install `@tanstack/react-table` and wire with Shadcn DataTable shell
+- [x] Define columns: Ticket ID, Department, Severity Badge, SLA Countdown, Status, Assigned Staff, Actions
+- [x] SLA Countdown: `useEffect` interval computing `sla_deadline - Date.now()`
+- [x] Critical SLA hoisting: custom sort comparator pushes `< 2h` tickets to viewport top
+- [x] Breached SLA styling: red left-border via CSS + Framer Motion pulsing opacity animation
+- [x] Color independence: every urgency level conveys meaning via color + icon + text label simultaneously
+
+### B. Secondary-Click PHI Modal
+- [ ] "View Details" button triggers modal overlay
+- [ ] MFA re-confirmation prompt before decryption (AAL2 check)
+- [ ] Modal calls [readComplaintPHI()](file:///c:/Application%20V4.0/src/actions/complaints.ts#13-108) ALE Server Action
+- [ ] Workflow: validate JWT → fetch `BYTEA` → AES-256-GCM decrypt → render plaintext
+- [ ] `audit_reads` INSERT fires on modal open (fire-and-forget)
+- [ ] Dashboard surface shows ZERO PHI: only Ward, Urgency Badge, Category, SLA Countdown
+
+### C. Dynamic SLA Configuration UI
+- [ ] Build `/settings/sla-config` page under admin route group
+- [ ] Slider: `max_acknowledgement_hours` (1—24), inline NABH validation (≤24)
+- [ ] Slider: `max_resolution_hours` (1—720), inline NABH validation (≤720)
+- [ ] Save: `UPDATE sla_configurations` via Server Action
+- [ ] Post-save: `inngest.send("sla/config-updated")` → concurrent materialized view refresh
+
+### D. Staff Offline CRDT Resolution
+- [x] Install `yjs` + `y-supabase` provider
+- [x] Create `Y.Doc` per `complaint_id` for collaborative resolution notes
+- [x] Offline edits persist in local Yjs state
+- [x] On reconnect: Yjs syncs deltas via Supabase Realtime channel
+
+---
+
+**Deliverable:** Offline staff update demo; ALE PHI modal decryption proof; NABH SLA ceiling validation

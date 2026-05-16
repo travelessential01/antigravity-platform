@@ -1,0 +1,1 @@
+UPDATE auth.sso_providers SET resource_id = 'http://localhost:8000/auth/v1'; UPDATE saml_providers SET entity_id = 'http://localhost:8000/auth/v1', metadata_xml = replace(metadata_xml, 'entityID="http://localhost:8000"', 'entityID="http://localhost:8000/auth/v1"') WHERE id = 'c2a666b8-f53c-4e57-8d28-95e3c2b85d91';

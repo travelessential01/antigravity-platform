@@ -54,9 +54,9 @@ CREATE INDEX idx_notifications_pending
 -- =============================================================
 -- Verify all new indexes
 -- =============================================================
-SELECT indexname, tablename FROM pg_indexes 
-WHERE schemaname = 'public' 
-  AND indexname LIKE 'idx_%' 
+SELECT indexname, tablename FROM pg_indexes
+WHERE schemaname = 'public'
+  AND indexname LIKE 'idx_%'
   AND indexname IN (
     'idx_complaints_assigned_to',
     'idx_complaints_sla_overdue',

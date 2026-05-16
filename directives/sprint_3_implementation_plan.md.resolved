@@ -1,0 +1,67 @@
+# Implementation Plan: Sprint 3 - Complaint Intake & SLA Engine
+
+## Goal Description
+The objective of Sprint 3 is to build the patient-facing intake experience and the backend infrastructure required to govern it. This encapsulates a zero-friction, offline-first Dual-Phase PWA for patients, matched with a robust, O(1) event-driven SLA scheduling and escalation engine built on Inngest.
+
+---
+
+## User Review Required
+> [!IMPORTANT]
+> **Database Provisioning (Local):** `pg_trgm` must be active on your local Supabase instance.
+> **Inngest:** You must provision a free tier Inngest account and supply `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` before Task 3.3 execution begins.
+
+---
+
+## Proposed Changes
+
+### Offline PWA Infrastructure & CRDT
+*Laying the foundation for connectionless patient intake submissions and background syncing.*
+#### [NEW] [next-pwa config](file:///c:/Application%20V4.0/next.config.cjs)
+*(Converting to `.cjs` due to next-pwa ESM constraints, wrapping the Next config to generate Service Workers).*
+#### [NEW] [offline-sync.ts](file:///c:/Application%20V4.0/src/lib/offline-sync.ts)
+*Service Worker dual-phase sync manager, utilizing `navigator.connection` to delay media payload streams.*
+#### [NEW] [indexeddb-schema.ts](file:///c:/Application%20V4.0/src/lib/indexeddb-schema.ts)
+*Yjs wrapper configuring the SHA-256 deduplication hashing strategy for stored local forms.*
+
+---
+
+### Patient Intake UI
+*The clinical interface designed for accessibility and maximum conversion.*
+#### [NEW] [page.tsx](file:///c:/Application%20V4.0/src/app/(patient)/intake/page.tsx)
+*Single-column, reactive layout. Implements [OTP](file:///c:/Application%20V4.0/supabase/docker/gotrue_conf.go#626-634) bypass toggle specifically for Sprint 3/4 testing.*
+#### [NEW] [qr-bridge.tsx](file:///c:/Application%20V4.0/src/components/patient/qr-bridge.tsx)
+*Parses `?hospital_id=` context to prepopulate facility forms.*
+#### [NEW] [consent-checkbox.tsx](file:///c:/Application%20V4.0/src/components/patient/consent-checkbox.tsx)
+*Forces state constraint: No `complaint_phi` Server Action can fire without explicit DPDP legal assent recorded.*
+
+---
+
+### Duplicate Merge & Workflow Engine
+*The synchronous boundary validating data integrity before the SLA clock starts.*
+#### [NEW] [workflow.ts](file:///c:/Application%20V4.0/src/actions/workflow.ts)
+*Contains the Status State Machine. Errors on invalid transitions.*
+#### [MODIFY] [complaints.ts](file:///c:/Application%20V4.0/src/actions/complaints.ts)
+*Injects the `pg_trgm` 10-minute similarity search loop prior to formal INSERT.*
+
+---
+
+### Inngest Event-Driven SLA Engine
+*Exact temporal scheduling replacing inefficient cron-polling architectures.*
+#### [NEW] [route.ts](file:///c:/Application%20V4.0/src/app/api/inngest/route.ts)
+*Exposes the primary API route serving the Inngest local/cloud execution tunnel.*
+#### [NEW] [client.ts](file:///c:/Application%20V4.0/src/lib/inngest/client.ts)
+*Initializes the Inngest instance with `id: antigravity-v4`.*
+#### [NEW] [sla-functions.ts](file:///c:/Application%20V4.0/src/lib/inngest/sla-functions.ts)
+*Houses the `sla/deadline` scheduled function and the `sla/wake-up` 15-minute escalation pivot function.*
+
+---
+
+## Verification Plan
+
+### Automated Tests
+1.  **PWA Offline Isolation Test:** Sever network connection within Chromium dev tools, submit 3 complaints. Verify IndexDB integrity. Restore network condition to `4G, 5G or wifi connection`, verify auto-sync to Postges completion.
+2.  **Trigram Duplicate Merge Test:** Submit identical plaintexts within a `2-minute window`. Assert the second payload adopts a `parent_complaint_id` and bypasses the SLA queue.
+
+### Manual Verification
+1.  **Inngest Trigger Visibility:** Developer will physically observe the `localhost:8288` Inngest dashboard to witness the exact temporal alignment of the generated SLA event matching the scheduled deadline.
+2.  **QR Context Bridging:** Visit `localhost:3000/patient/intake?hospital_id=TEST_ID` and prove the form parses and locks the facility field implicitly.

@@ -1,0 +1,50 @@
+# Task 4.3: Multi-Channel Notification Engine
+
+**Owner:** Backend Engineer | **Risk:** MEDIUM | **Sprint:** 4
+
+---
+
+## Sub-Tasks
+
+### A. Deno Edge Functions
+- [ ] Author `supabase/functions/on-complaint-created/index.ts`
+  - Triggered by `complaints` INSERT webhook
+  - Identifies shift-active manager via `on_call_schedules` query
+  - Dispatches in-app notification with `secure_link_id` (ZERO PHI)
+- [ ] Author `supabase/functions/on-sla-breach/index.ts`
+  - Triggered by `sla_breach_log` INSERT webhook
+  - Dispatches SMS + email escalation to on-call manager
+  - Embeds TRAI/DLT Template ID in every SMS payload
+- [ ] Author `supabase/functions/nightly-compliance-audit/index.ts`
+  - Scheduled via `pg_cron` at 02:30 IST nightly
+  - Checks: 24h acknowledgment breaches, NULL escalations, stuck `investigating` tickets, CAPA gaps
+
+### B. Zero-PHI Enforcement
+- [ ] ALL notification channels (email, SMS, in-app) transmit ZERO patient data
+- [ ] Only `secure_link_id` transmitted — requires authenticated session to resolve details
+- [ ] Validate: inspect raw SMS/email payload — no description, name, or contact fields
+
+### C. 1-Click Deep-Link Acknowledgment
+- [ ] Build `src/app/api/acknowledge/route.ts` POST handler
+- [ ] Generate JWT-signed deep-link token: single-use UUID, 15-min TTL
+- [ ] On valid click: `UPDATE complaints SET status = 'acknowledged'`
+- [ ] Cancel Inngest SLA timer: `inngest.send("complaint/resolved")`
+- [ ] Set `notifications.status = 'Read'`
+- [ ] Rate limit: 5 req/min on `/api/acknowledge` via Redis Token Bucket
+- [ ] Replay protection: consumed tokens return `403 — token already consumed`
+
+### D. TRAI/DLT SMS Compliance
+- [ ] MSG91 as primary SMS gateway — configure via [.env](file:///c:/Application%20V4.0/.env) (`MSG91_API_KEY`, `MSG91_SENDER_ID`)
+- [ ] Twilio as fallback — configure via [.env](file:///c:/Application%20V4.0/.env) (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`)
+- [ ] Pre-approved DLT Template IDs embedded in every SMS payload
+- [ ] Fallback logic: if MSG91 returns error, retry once via Twilio
+
+### E. Shift-Aware Routing & Idempotency
+- [ ] Query `on_call_schedules` before dispatching any notification
+- [ ] If no active shift found → default to Quality Coordinator
+- [ ] Check `processed_events` BEFORE dispatching — prevent duplicates on Edge Function retry
+- [ ] INSERT `processed_events` entry AFTER successful dispatch
+
+---
+
+**Deliverable:** E2E demo — breach → shift-aware SMS → 1-click acknowledge → SLA timer stops

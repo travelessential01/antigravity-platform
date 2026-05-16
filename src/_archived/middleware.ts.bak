@@ -1,0 +1,115 @@
+/**
+ * middleware.ts — Next.js Edge Middleware
+ * Phase 3.6 — StayAssist V1 Auth Architecture
+ *
+ * Responsibilities:
+ *   1. Supabase session refresh (standard @supabase/ssr pattern)
+ *   2. Route protection — unauthenticated users redirected to /login
+ *   3. Session context injection — reads sa_dept_ctx cookie → resolves active_dept_id
+ *      from staff_session_context table → injects X-Active-Dept-Id request header
+ *      so RLS functions (get_active_department_id, get_active_staff_departments) can
+ *      read it via current_setting('request.headers')
+ *
+ * Public routes (no auth required):
+ *   /login, /auth/*, /api/auth/otp/*, /patient/*, /mock-qr, /api/health, /api/qr
+ *
+ * Note: Supabase session lookup via DB is NOT allowed in Edge runtime.
+ * The session context DB lookup uses the anon key with RLS — the user can only
+ * read their own staff_session_context row (policy: auth_user_id = auth.uid()).
+ */
+
+import { NextRequest, NextResponse } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+
+// ── Public route patterns (no auth gate) ─────────────────────────────────────
+
+const PUBLIC_PATTERNS = [
+  /^\/login/,
+  /^\/auth\//,
+  /^\/patient\//,
+  /^\/mock-qr/,
+  /^\/api\/auth\//,
+  /^\/api\/health/,
+  /^\/api\/qr/,
+  /^\/_next\//,
+  /^\/favicon/,
+  /^\/public\//,
+]
+
+function isPublicRoute(pathname: string): boolean {
+  return PUBLIC_PATTERNS.some((p) => p.test(pathname))
+}
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+  const response = NextResponse.next({
+    request: { headers: new Headers(request.headers) },
+  })
+
+  // ── 1. Supabase SSR client (refreshes session cookie automatically) ────────
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => request.cookies.getAll(),
+        setAll: (cookiesToSet) => {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options)
+          )
+        },
+      },
+    }
+  )
+
+  // Refresh session silently (keeps JWT alive)
+  const { data: { session } } = await supabase.auth.getSession()
+
+  // ── 2. Route protection ───────────────────────────────────────────────────
+  if (!session && !isPublicRoute(pathname)) {
+    const loginUrl = request.nextUrl.clone()
+    loginUrl.pathname = '/login'
+    loginUrl.searchParams.set('redirect', pathname)
+    return NextResponse.redirect(loginUrl)
+  }
+
+  // ── 3. Session context injection (staff routes only) ─────────────────────
+  // Only inject for authenticated staff routes — skips public + API routes
+  if (session && !isPublicRoute(pathname) && !pathname.startsWith('/api/')) {
+    const deptCtxCookie = request.cookies.get('sa_dept_ctx')?.value
+
+    if (deptCtxCookie) {
+      // Resolve active_dept_id from staff_session_context
+      // RLS ensures user can only read their own row
+      const { data: ctx } = await supabase
+        .from('staff_session_context')
+        .select('active_dept_id, expires_at')
+        .eq('auth_user_id', session.user.id)
+        .eq('session_token', deptCtxCookie)
+        .gt('expires_at', new Date().toISOString())
+        .single()
+
+      if (ctx?.active_dept_id) {
+        // Inject header so RLS helper get_active_department_id() can read it
+        response.headers.set('x-active-dept-id', ctx.active_dept_id as string)
+      } else {
+        // Expired or invalid context — clear cookie and force re-login
+        // (staff will need to select dept again on next login)
+        response.cookies.delete('sa_dept_ctx')
+      }
+    }
+  }
+
+  return response
+}
+
+// ── Matcher — run middleware on all routes except static assets ───────────────
+
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
+}

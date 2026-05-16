@@ -1,0 +1,70 @@
+# Sprint 7 — Buffer, Performance Tuning & Production Release
+*Tasks 7.1 · 7.2 · 7.3 · 7.4 | Full Stack Team | Risk: LOW*
+
+---
+
+## Task 7.1 — Architectural Spillover Remediation
+*Database Architect + Backend Engineer | MEDIUM*
+
+- [ ] Triage and resolve schema or RLS issues surfaced during Sprint 6
+- [ ] Address Inngest job queue edge cases from the Thundering Herd simulation
+- [ ] Resolve Authentik/Keycloak SAML SSO edge cases across enterprise AD configurations
+- [ ] Re-run full RLS validation report if any policy changes were made during Sprint 6
+- [ ] Validate ALE key rotation procedure end-to-end (required if Sprint 6 surfaced KMS latency issues)
+
+---
+
+## Task 7.2 — Frontend Performance & PWA Optimisation
+*Frontend Architect | MEDIUM*
+
+- [ ] Run bundle analysis: `npx @next/bundle-analyzer` — identify and eliminate unnecessary client-side JS
+- [ ] Achieve Lighthouse PWA score > 95 on 3G simulation (rural connectivity target)
+- [ ] Apply Framer Motion tree-shaking; lazy-load heavy Shadcn components; convert images to WebP via `next/image`
+- [ ] Review Service Worker cache strategy — ensure stale auth tokens are never served from offline cache
+- [ ] **Deliverable:** Before/after Lighthouse scores; bundle size reduction evidence
+
+---
+
+## Task 7.3 — Security Patch Remediation
+*Security Engineer | MEDIUM*
+
+- [ ] Remediate all Medium and Low findings from the Sprint 6 penetration test report
+- [ ] Re-run CodeQL and semgrep IDOR scans — must return **zero violations**
+- [ ] Run `npm audit` — no HIGH or CRITICAL CVEs permitted in production dependencies
+- [ ] Perform HIPAA Minimum Necessary walkthrough on all API response payloads
+- [ ] Validate ALE Server Action access control: confirm no response returns plaintext PHI outside the authenticated modal
+
+---
+
+## Task 7.4 — Production Deployment & Documentation ⏸️ *[ON HOLD — Awaiting Final Instruction]*
+*DevOps Engineer + Full Stack Team | LOW*
+
+### Production Environment Setup
+- [ ] Provision production server(s) in **ap-south-1 (Mumbai)** — satisfies all DPDP data-residency requirements
+- [ ] Deploy self-hosted Supabase Docker Compose on production servers; run all 15 migrations
+- [ ] Validate WAL-G archiving to production ap-south-1 S3 (`walg backup-list` must confirm operational)
+- [ ] Deploy Authentik/Keycloak IdP on production; import production staff directory from Pre-Task 2.2
+- [ ] Configure Inngest production key and activate production webhooks
+- [ ] Deploy SigNoz production stack; activate all custom metrics and PagerDuty alert rules
+
+### QR Code Asset Generation *(New in v4.1)*
+- [ ] Generate one hospital-specific QR per facility (`/(patient)/intake?hospital_id=[uuid]`)
+- [ ] Export as high-resolution PNG **and** SVG for print (minimum 300 DPI for kit box insert)
+- [ ] Validate: each QR scanned on physical device correctly launches Service Worker-cached offline form
+- [ ] Deliver QR assets to hospital operations team for next patient welcome kit print run
+
+### Environment & Secrets
+- [ ] All secrets via production secrets manager — **zero secrets in codebase or plain `.env` files**
+- [ ] Production `PHI_ENCRYPTION_KEY_ID` registered in AWS KMS (ap-south-1); scoped to Antigravity IAM role only
+- [ ] OTP mock removed: confirm SMS OTP gateway is fully live for production ⏸️ *[Hold for final instruction]*
+
+### Deployment & Documentation
+- [ ] Execute blue-green deployment with staged rollout: **5% → 25% → 100% traffic**
+- [ ] Upgrade Vercel plan from Hobby to **Pro** at production cutover
+- [ ] Author Clinical Training Documentation:
+  - [ ] Zero-Training visual guide for Staff Dashboard (SLA management, offline sync, 1-click acknowledge)
+  - [ ] Quality Coordinator guide (ALE PHI access, MFA re-auth flow, CAPA signing, report export)
+  - [ ] DPO Investigator guide (forensic query, HIPAA audit report generation)
+  - [ ] Hospital IT guide (Authentik/Keycloak group management, staff onboarding/offboarding)
+- [ ] Final sign-off checklist: Supabase health ✓ · WAL-G backup ✓ · SigNoz green ✓ · Inngest healthy ✓ · PagerDuty active ✓
+- [ ] **Deliverable:** Production live; WAL-G validated; QR codes delivered; all documentation complete; all checks green

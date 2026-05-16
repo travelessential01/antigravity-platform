@@ -1,0 +1,139 @@
+# StayAssist V1 — Dependency Chain
+
+Maps the precise execution order required to avoid regressions. Session governance tasks (A.5–A.9) are fully integrated.
+
+---
+
+## Dependency Graph
+
+```mermaid
+graph TD
+    subgraph "Sprint A: Infrastructure & Session Governance"
+        A1["A.1: Docker StayAssist Redis<br/>(docker-compose.stayassist.yml)"]
+        A1a["A.1.3: Refactor rate-limit.ts<br/>(new URL + fail-open)"]
+        A2["A.2: Centralized auth-guard.ts<br/>+ Migration 029 (is_active)<br/>+ JWT_EXPIRY=1800"]
+        A3["A.3: Strip OTEL packages<br/>(11 packages + 7 files)"]
+        A4["A.4: Remove offline-sync<br/>(6 files + 4 packages)"]
+        A5["A.5: Fix login cookie synthesis<br/>(PKCE flow)"]
+        A6["A.6: SSO config → env vars<br/>(providerId, redirectTo)"]
+        A7["A.7: Protected layouts<br/>((admin), (dpo), (staff))"]
+        A8["A.8: Secure API routes<br/>(hospitals, faqs)"]
+        A9["A.9: Remove service-role<br/>from render paths"]
+    end
+
+    subgraph "Sprint B: Database"
+        B1["B.1: Migration 030<br/>(DROP patient_id FK)"]
+        B2["B.2: Migration 031<br/>(ADD key_version)"]
+        B3["B.3: resolveComplaint()<br/>(Server Action)"]
+    end
+
+    subgraph "Sprint C: Gating"
+        C1["C.1: Mock OTP retained"]
+        C2["C.2: aws-secrets.ts scaffold"]
+        VF["FINAL: pnpm build + E2E test"]
+    end
+
+    %% Sprint A internal dependencies
+    A1 --> A1a
+    A6 --> A5
+    A2 --> A7
+    A2 --> A8
+    A2 --> A9
+    A2 --> A5
+
+    %% Sprint A → B
+    A4 -->|"columns.tsx freed<br/>from useCrdtStore"| B3
+    A2 -->|"requireUser() reused<br/>in resolveComplaint"| B3
+
+    %% All → Final
+    A1a --> VF
+    A3 --> VF
+    A4 --> VF
+    A5 --> VF
+    A7 --> VF
+    A8 --> VF
+    A9 --> VF
+    B1 --> VF
+    B2 --> VF
+    B3 --> VF
+    C1 --> VF
+    C2 --> VF
+```
+
+---
+
+## Critical Path Analysis
+
+### Mandatory Sequencing (Hard Blockers)
+
+| Step | Must Complete Before | Reason |
+|:---|:---|:---|
+| **A.1** (Redis container up) | **A.1.3** (rate-limit.ts refactor) | Changing URL to 6380 before container exists crashes intake |
+| **A.2** (auth-guard.ts + migration 029) | **A.5** (login fix) | Login fix removes old auth flow, needs new guard utilities available |
+| **A.2** (auth-guard.ts) | **A.7** (protected layouts) | Layouts call `requireUser/requireRole/requirePrivileged` |
+| **A.2** (auth-guard.ts) | **A.8** (API route auth) | Routes call `requireRole` |
+| **A.2** (auth-guard.ts) | **A.9** (service-role removal) | `org-dashboard` uses `createAuthenticatedClient()` from guard |
+| **A.6** (SSO env vars) | **A.5** (login PKCE fix) | Login page needs `NEXT_PUBLIC_SITE_URL` env var before changing redirectTo |
+| **A.4** (remove `useCrdtStore`) | **B.3** (`resolveComplaint`) | `columns.tsx` must be free of CRDT import before Server Action wiring |
+| **A.2** (`requireUser()` pattern) | **B.3** (`resolveComplaint`) | Resolve action calls `requireUser()` |
+| **A.3 + A.4** (OTEL + offline removed) | **Final build** | Partial removal breaks the build |
+
+### Parallelizable Work (No Dependencies)
+
+```
+Group 1 (independent):      A.1 → A.1.3 → A.1.4
+Group 2 (independent):      A.2 (auth-guard + migration + JWT)
+Group 3 (independent):      A.3 (all OTEL removal)
+Group 4 (after A.3):        A.4 (offline removal)
+Group 5 (after A.2):        A.6 → A.5 (SSO env → login fix)
+Group 6 (after A.2):        A.7 (protected layouts)
+Group 7 (after A.2):        A.8 (API route auth)
+Group 8 (after A.2 + A.7):  A.9 (service-role removal — layout protects page)
+Group 9 (anytime):          B.1, B.2 (database only — no code deps on each other)
+Group 10 (after A.4 + A.2): B.3 (resolve action)
+Group 11 (anytime):         C.1, C.2 (no code deps)
+```
+
+### Recommended Execution Order
+
+```
+ 1. A.2    — Create auth-guard.ts + migration 029 + JWT_EXPIRY    [FOUNDATION — unblocks 5 tasks]
+ 2. A.1    — Stand up Redis container                              [independent]
+ 3. A.1.3  — Refactor rate-limit.ts                                [depends on A.1]
+ 4. A.6    — SSO config to env vars                                [unblocks A.5]
+ 5. A.5    — Fix login cookie synthesis → PKCE                     [depends on A.2, A.6]
+ 6. A.7    — Create protected layouts                              [depends on A.2]
+ 7. A.8    — Secure unprotected API routes                         [depends on A.2]
+ 8. A.9    — Remove service-role from render paths                 [depends on A.2, A.7]
+ 9. A.3    — Strip all OTEL (atomic batch)                         [independent]
+10. A.4    — Remove all offline-sync (atomic batch)                [independent]
+11. Wire auth-guard into refactored Server Actions (A.2.5–A.2.8)  [depends on A.2, A.3]
+12. B.1    — Run migration 030: drop FK                            [independent]
+13. B.2    — Run migration 031: add key_version                    [independent]
+14. B.3    — Build resolveComplaint + wire Resolve button          [depends on A.4, A.2]
+15. C.1    — Verify mock OTP
+16. C.2    — Create aws-secrets scaffold + .env.example
+17. FINAL  — pnpm install → pnpm build → E2E verification
+```
+
+> [!IMPORTANT]
+> **A.2 (auth-guard.ts) is the critical path bottleneck.** It must be built first because 5 downstream tasks (A.5, A.7, A.8, A.9, B.3) depend on it. Prioritize this above all else.
+
+---
+
+## Rollback Plan
+
+| Task | Rollback Strategy |
+|:---|:---|
+| **A.1** | `docker compose -f docker-compose.stayassist.yml down` → revert REDIS_URL to 6379 |
+| **A.2** | Delete `auth-guard.ts` → restore raw `getSession()` boilerplate in actions → rollback migration 029 |
+| **A.3** | `git checkout -- package.json src/lib/telemetry.ts src/lib/otel-node-sdk.ts src/instrumentation.ts` → `pnpm install` |
+| **A.4** | `git checkout -- src/lib/offline-sync.ts src/store/ IntakeForm.tsx next.config.mjs package.json` → `pnpm install` |
+| **A.5** | Restore the `onAuthStateChange` cookie synthesis block in `login/page.tsx` |
+| **A.6** | Revert env vars to hardcoded values in `login/page.tsx` |
+| **A.7** | Delete `(admin)/layout.tsx`, `(dpo)/layout.tsx`, `(staff)/layout.tsx` |
+| **A.8** | Remove auth guards from `hospitals/route.ts` and `faqs/route.ts` |
+| **A.9** | Revert `org-dashboard/page.tsx` to service-role `createClient()` |
+| **B.1** | Re-add FK: `ALTER TABLE complaints ADD CONSTRAINT complaints_patient_id_fkey FOREIGN KEY (patient_id) REFERENCES users(id)` |
+| **B.2** | `ALTER TABLE complaint_phi DROP COLUMN key_version` |
+| **B.3** | Revert `columns.tsx` to CRDT-based resolve (stale but functional for demo) |
