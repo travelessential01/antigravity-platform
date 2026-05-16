@@ -1,88 +1,53 @@
-/**
- * Task 6.1 — k6 Dashboard Concurrent Reader Test
- *
- * Simulates 100 concurrent staff users reading the Zero-PHI
- * Quality Dashboard via Supabase PostgREST (mirrors the exact
- * query the dashboard page.tsx runs on mount).
- *
- * Uses department-scoped anon JWTs to verify RLS enforcement
- * under load — no cross-department data should leak.
- *
- * Pass Criteria:
- *   - P95 < 200ms for dashboard query
- *   - Zero cross-department data returned
- *   - Zero HTTP 5xx responses
- *
- * Usage:
- *   k6 run tests/load/k6_dashboard_readers.js
- */
-
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Rate, Trend, Counter } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 
-// ──────────────────────────────────────────────
-// Configuration
-// ──────────────────────────────────────────────
-const SUPABASE_URL  = __ENV.SUPABASE_URL  || 'http://localhost:8000';
-const ANON_KEY      = __ENV.ANON_KEY      || 'eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE2MDAwMDAwMDAsICJleHAiOiAxOTAwMDAwMDAwfQ.tfXUnQb4V-rJjS7J_kqtZFS4Esx_Xb93M-jnQ4SnEiY';
-const SERVICE_KEY   = __ENV.SERVICE_KEY   || 'eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogInNlcnZpY2Vfcm9sZSIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTYwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.BkDnR45usq6gCB3cQM9OK1KnA3_2xG3c1Qm2qAlRmaA';
+function requiredEnv(name) {
+  const value = __ENV[name];
+  if (!value) {
+    throw new Error(`Missing required k6 env var: ${name}`);
+  }
+  return value;
+}
 
-// Department IDs and their managers
-const ROLE_CONFIGS = [
-  { deptId: '42254d74-623c-4472-bb04-df406fcf09c9', role: 'department_manager', name: 'Medicine'    },
-  { deptId: '534cf3be-82f5-4eed-9d14-bf4a207285bb', role: 'department_manager', name: 'Surgery'     },
-  { deptId: '629bc299-0a8d-4d8d-8796-ed1483b075a3', role: 'department_manager', name: 'Nursing'     },
-  { deptId: 'c75d2dc3-6344-4c6f-afa1-9d6d43e9d9f1', role: 'department_manager', name: 'Housekeeping'},
-  { deptId: '4cd2e801-8b32-4517-947d-c9f20c7292a9', role: 'department_manager', name: 'Emergency'   },
-  { deptId: '78619ac0-caa3-4742-b31e-181d30c8d5e0', role: 'department_manager', name: 'Operations'  },
-  { deptId: '636fb19e-f53c-42d7-ace6-da882600d481', role: 'quality_coordinator', name: 'Quality'    },
-];
+const SUPABASE_URL = requiredEnv('SUPABASE_URL');
+const ANON_KEY = requiredEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+const STAFF_JWTS = JSON.parse(requiredEnv('TEST_STAFF_JWTS_JSON'));
+const RUN_ID = __ENV.TEST_RUN_ID || `k6-dashboard-${Date.now()}`;
 
-// ──────────────────────────────────────────────
-// k6 Options — 100 Concurrent Dashboard Users
-// ──────────────────────────────────────────────
 export const options = {
   stages: [
-    { duration: '5s',  target: 25  },  // Warm up
-    { duration: '10s', target: 50  },  // Ramp
-    { duration: '20s', target: 100 },  // Full load
-    { duration: '30s', target: 100 },  // Sustain
-    { duration: '5s',  target: 0   },  // Cool down
+    { duration: '5s', target: Number(__ENV.K6_WARMUP_VUS || 25) },
+    { duration: '10s', target: Number(__ENV.K6_RAMP_VUS || 50) },
+    { duration: '20s', target: Number(__ENV.K6_PEAK_VUS || 100) },
+    { duration: '30s', target: Number(__ENV.K6_PEAK_VUS || 100) },
+    { duration: '5s', target: 0 },
   ],
   thresholds: {
-    'http_req_duration':   ['p(95)<200'],  // P95 < 200ms
-    'http_req_failed':     ['rate<0.01'],  // < 1% error rate
-    'cross_dept_leaks':    ['count==0'],   // Zero cross-department leaks
+    http_req_duration: ['p(95)<200', 'p(99)<500'],
+    http_req_failed: ['rate<0.01'],
+    successful_reads: ['count>0'],
+    cross_dept_leaks: ['count==0'],
+    http_5xx: ['count==0'],
   },
 };
 
-// ──────────────────────────────────────────────
-// Custom Metrics
-// ──────────────────────────────────────────────
-const queryLatency       = new Trend('dashboard_query_latency_ms');
-const successfulReads    = new Counter('successful_reads');
-const failedReads        = new Counter('failed_reads');
-const crossDeptLeaks     = new Counter('cross_dept_leaks');
-const errorRate          = new Rate('dashboard_error_rate');
+const queryLatency = new Trend('dashboard_query_latency_ms');
+const successfulReads = new Counter('successful_reads');
+const failedReads = new Counter('failed_reads');
+const crossDeptLeaks = new Counter('cross_dept_leaks');
+const http5xx = new Counter('http_5xx');
+const errorRate = new Rate('dashboard_error_rate');
 
-// ──────────────────────────────────────────────
-// Test: Dashboard Data Fetch
-// (Mirrors the exact Supabase query from page.tsx)
-// ──────────────────────────────────────────────
 export default function () {
-  const vuId = __VU;
-  const config = ROLE_CONFIGS[vuId % ROLE_CONFIGS.length];
-
-  // Use service_role key for now since we don't have per-user JWTs in k6
-  // RLS enforcement is validated by checking department_id in response
+  const config = STAFF_JWTS[__VU % STAFF_JWTS.length];
   const headers = {
-    'Content-Type':  'application/json',
-    'apikey':        SERVICE_KEY,
-    'Authorization': `Bearer ${SERVICE_KEY}`,
+    'Content-Type': 'application/json',
+    apikey: ANON_KEY,
+    Authorization: `Bearer ${config.jwt}`,
+    'x-test-run-id': RUN_ID,
   };
 
-  // Mirror the exact dashboard query from page.tsx
   const queryParams = [
     'select=id,created_at,updated_at,status,severity_level,sla_deadline,department_id,departments(name)',
     'deleted_at=is.null',
@@ -91,70 +56,57 @@ export default function () {
     'limit=50',
   ].join('&');
 
-  const startTime = Date.now();
-  const res = http.get(
-    `${SUPABASE_URL}/rest/v1/complaints?${queryParams}`,
-    { headers, tags: { name: 'DashboardFetch' } }
-  );
-  const elapsed = Date.now() - startTime;
-  queryLatency.add(elapsed);
+  const started = Date.now();
+  const res = http.get(`${SUPABASE_URL}/rest/v1/complaints?${queryParams}`, {
+    headers,
+    tags: { name: 'DashboardFetch', run_id: RUN_ID },
+  });
+  queryLatency.add(Date.now() - started);
 
-  const isSuccess = check(res, {
-    'status is 200':        (r) => r.status === 200,
-    'response is array':    (r) => {
-      try { return Array.isArray(JSON.parse(r.body)); }
-      catch { return false; }
+  const ok = check(res, {
+    'status is 200': (r) => r.status === 200,
+    'response is array': (r) => {
+      try {
+        return Array.isArray(JSON.parse(r.body));
+      } catch {
+        return false;
+      }
     },
   });
 
-  if (isSuccess) {
+  if (ok) {
     successfulReads.add(1);
     errorRate.add(false);
-
-    // Cross-department leakage check for department_manager roles
-    // Under proper RLS, a department_manager should only see their own dept
-    // With service_role, we simulate by checking the response for anomalies
-    try {
-      const data = JSON.parse(res.body);
-      if (config.role === 'department_manager' && data.length > 0) {
-        // In a real RLS scenario, verify no cross-department data
-        // This is a structural check — actual RLS is validated in Task 6.2
-        const hasMixedDepts = data.some(row =>
-          row.department_id && row.department_id !== config.deptId
-        );
-        // Log but don't fail — service_role sees all data by design
-        // True cross-dept isolation is tested with per-user JWTs in Task 6.2
-        if (hasMixedDepts && __ENV.STRICT_RLS_CHECK === 'true') {
-          crossDeptLeaks.add(1);
-        }
-      }
-    } catch { /* non-fatal parse error */ }
+    const data = JSON.parse(res.body);
+    if (config.departmentId && data.some((row) => row.department_id && row.department_id !== config.departmentId)) {
+      crossDeptLeaks.add(1);
+    }
   } else {
     failedReads.add(1);
     errorRate.add(true);
+    if (res.status >= 500) {
+      http5xx.add(1);
+    }
   }
 
-  // Simulate real user think time (scrolling, reading)
   sleep(Math.random() * 2 + 0.5);
 }
 
-// ──────────────────────────────────────────────
-// Summary Handler
-// ──────────────────────────────────────────────
 export function handleSummary(data) {
-  const p50 = data.metrics.http_req_duration?.values?.['p(50)'] || 'N/A';
-  const p95 = data.metrics.http_req_duration?.values?.['p(95)'] || 'N/A';
-  const p99 = data.metrics.http_req_duration?.values?.['p(99)'] || 'N/A';
-
-  console.log('\n' + '='.repeat(60));
-  console.log('  TASK 6.1 — DASHBOARD CONCURRENT READER RESULTS');
-  console.log('='.repeat(60));
-  console.log(`  P50 Latency:  ${typeof p50 === 'number' ? p50.toFixed(2) : p50}ms`);
-  console.log(`  P95 Latency:  ${typeof p95 === 'number' ? p95.toFixed(2) : p95}ms  (threshold: <200ms)`);
-  console.log(`  P99 Latency:  ${typeof p99 === 'number' ? p99.toFixed(2) : p99}ms`);
-  console.log('='.repeat(60) + '\n');
+  const values = data.metrics.http_req_duration?.values || {};
+  const summary = {
+    runId: RUN_ID,
+    p95: values['p(95)'],
+    p99: values['p(99)'],
+    httpFailureRate: data.metrics.http_req_failed?.values?.rate,
+    successfulReads: data.metrics.successful_reads?.values?.count,
+    failedReads: data.metrics.failed_reads?.values?.count,
+    http5xx: data.metrics.http_5xx?.values?.count,
+    crossDeptLeaks: data.metrics.cross_dept_leaks?.values?.count,
+  };
 
   return {
-    stdout: JSON.stringify(data, null, 2),
+    stdout: `${JSON.stringify(summary, null, 2)}\n`,
+    [`tests/load/results/${RUN_ID}.json`]: JSON.stringify({ summary, raw: data }, null, 2),
   };
 }

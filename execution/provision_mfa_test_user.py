@@ -4,8 +4,11 @@ import json
 from time import sleep
 
 # Load keys from docker-compose or .env
-SUPABASE_URL = "http://localhost:8000"
-SERVICE_ROLE_KEY = "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogInNlcnZpY2Vfcm9sZSIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTYwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.BkDnR45usq6gCB3cQM9OK1KnA3_2xG3c1Qm2qAlRmaA"
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or "http://localhost:8000"
+SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+if not SERVICE_ROLE_KEY:
+    raise RuntimeError("Missing SUPABASE_SERVICE_ROLE_KEY.")
 
 headers = {
     "apikey": SERVICE_ROLE_KEY,

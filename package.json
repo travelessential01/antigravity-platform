@@ -14,6 +14,13 @@
     "typecheck": "tsc --project tsconfig.typecheck.json --noEmit --pretty false",
     "typecheck:next": "next typegen && tsc --noEmit --pretty false",
     "typecheck:fresh": "node scripts/clean-next-cache.mjs && next typegen && tsc --noEmit --pretty false",
+    "test:unit": "node tests/helpers/run-vitest.mjs run tests/unit tests/workflow",
+    "test:health": "node tests/helpers/run-vitest.mjs run tests/health",
+    "test:integration": "node tests/helpers/run-vitest.mjs run tests/integration",
+    "test:security": "node tests/helpers/run-vitest.mjs run tests/security",
+    "test:destructive": "node tests/helpers/run-vitest.mjs run tests/destructive",
+    "test:load": "node tests/load/run-load-tests.mjs",
+    "test:ci": "pnpm run test:unit && pnpm run test:health && pnpm run test:integration && pnpm run test:security",
     "supabase:sync-workdir": "node scripts/sync-supabase-cli-workdir.mjs",
     "supabase:link": "npx supabase link --workdir database/supabase-cli",
     "supabase:db:push:dry-run": "npx supabase db push --linked --workdir database/supabase-cli --dry-run --yes",
@@ -65,7 +72,9 @@
     "eslint-config-next": "16.1.6",
     "inngest-cli": "^1.19.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.6"
   },
   "pnpm": {
     "overrides": {
