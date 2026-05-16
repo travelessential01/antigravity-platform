@@ -1,0 +1,57 @@
+# Pushing Antigravity Core & Initializing CI/CD
+
+This guide provides the exact commands needed to safely push the untracked Core MVP code (`src/`, `package.json`) to GitHub, automatically triggering the `.github/workflows/ci.yml` pipeline.
+
+Because your repository strictly enforces **Branch Protections** (no direct pushes to `main` and mandatory **verified commit signatures**), we must execute this through a Pull Request branch via a terminal that has access to your GPG/SSH signing keys.
+
+> [!WARNING]
+> Before you run `git add .`, it is heavily critical that your security logs and hardcoded scanning tests are ignored so you don't leak passwords publicly!
+> *(Note: I have already appended `core_hits.txt`, `hardcoded_scan_results_utf8.txt`, `find_hardcoded.js`, and your `execution/*test_mfa*` files to your `.gitignore` file to ensure they do not get pushed lock, stock, and barrel).*
+
+---
+
+## Step 1: Create the Feature Branch
+To bypass the rule `Changes must be made through a pull request`, we will build out a specific initialization branch that we can PR back into `main`.
+
+Open your VS Code terminal or Git Bash where your signing keys are active, and run:
+```powershell
+git checkout -b feature/init-core-ci
+```
+
+## Step 2: Stage the Codebase
+Now we properly stage the CI YAML files, your missing Next.js configuration, and the previously untracked application source folders (`src/`).
+
+```powershell
+# This adds src/, package.json, and the corrected .github/ workflow
+git add src/ package.json pnpm-lock.yaml tsconfig.json postcss.config.mjs next.config.mjs .github/
+```
+*(If you want to add absolutely everything simply run `git add .` — the updated `.gitignore` will protect your scan logs).*
+
+## Step 3: Create the Verified Commit
+GitHub specifically demanded: `Commits must have verified signatures. (Found 2 violations)`. You **must** utilize the `-S` flag (if GPG signing is manually configured per command), or rely on your Git GUI auto-signing capabilities.
+
+If using the terminal:
+```powershell
+git commit -S -m "ci: add core source and initialize root ci pipeline"
+```
+*(If Git prompts for your GPG passphrase or SSH unlock, approve it).*
+
+## Step 4: Push to Remote
+Push your newly populated branch to the origin repository:
+
+```powershell
+git push -u origin feature/init-core-ci
+```
+
+## Step 5: Open the Pull Request
+Once the push succeeds, go to your GitHub Repository URL in your browser:
+1. Click **"Compare & pull request"**.
+2. Create the Pull Request targeting `main`.
+3. The moment the PR opens, you will see the **CI Pipeline** workflow trigger on the bottom of the PR page. It will begin running:
+   - *Install Dependencies*
+   - *Lint & Type Check*
+   - *Unit Tests*
+   - *Build Verification*
+   - *SQL Validation*
+
+Once it completes successfully (and assuming your PR meets the 4 required status checks), you can securely squash and merge this into `main`!

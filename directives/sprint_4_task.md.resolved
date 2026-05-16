@@ -1,0 +1,40 @@
+# Sprint 4: Master Task Tracker
+**Sprint Duration:** 2 Weeks | **Risk Level:** MEDIUM
+**Objective:** Real-time staff dashboard, staff offline CRDT resolution, multi-channel notifications with TRAI/DLT compliance, and Dynamic SLA Configuration UI.
+
+---
+
+### Task 4.1: Zero-PHI Quality Dashboard & Staff Offline Resilience
+- [ ] Build TanStack Table + Shadcn DataTable (Ticket ID, Dept, Severity Badge, SLA Countdown, Status, Staff, Actions)
+- [ ] Implement Critical SLA structural hoisting (< 2 hours → top of viewport)
+- [ ] Add breached SLA visual treatment (red border + Framer Motion pulse + CRITICAL text + icon)
+- [ ] Ensure color independence (urgency via color AND icon AND text label)
+- [ ] Build Secondary-Click PHI Modal with MFA re-confirmation prompt
+- [ ] Modal invokes ALE Server Action: JWT → BYTEA fetch → AES-256-GCM decrypt → render
+- [ ] Modal fires `audit_reads` telemetry
+- [ ] Build Dynamic SLA Configuration UI (sliders for `max_acknowledgement_hours` ≤24, `max_resolution_hours` ≤720)
+- [ ] SLA save triggers Inngest concurrent materialized view refresh
+- [ ] Implement Staff Offline CRDT (Yjs Y.Doc per `complaint_id`, Supabase Realtime sync)
+
+### Task 4.2: Supabase Realtime Subscriptions & WebSocket RLS
+- [ ] Subscribe to `complaints` (metadata only), `notifications`, `sla_breach_log`
+- [ ] WebSocket passes JWT — Realtime inherits RLS from `auth.jwt()` claims
+- [ ] Ward Nurses: events scoped to `department_id` only
+- [ ] Quality Coordinators: events scoped to `hospital_id`
+- [ ] Cross-tenant isolation validated
+- [ ] SLA breach INSERT → `useSlaStore.hoist(complaint_id)` → instant DataTable card reorder
+
+### Task 4.3: Multi-Channel Notification Engine
+- [ ] Author 3 Deno Edge Functions: `onComplaintCreated`, `onSlaBreach`, `nightlyComplianceAudit`
+- [ ] Enforce Zero-PHI rule on ALL channels (email, SMS, in-app)
+- [ ] Only `secure_link_id` transmitted
+- [ ] Build 1-Click Deep-Link: JWT-signed, single-use, 15-min TTL
+- [ ] Deep-link click: UPDATE complaint → acknowledged; cancel Inngest SLA; notifications.status = 'Read'
+- [ ] Rate limit `/api/acknowledge` at 5 req/min
+- [ ] TRAI/DLT: DLT Template IDs embedded in every SMS
+- [ ] MSG91 primary + Twilio fallback integration
+- [ ] Shift-aware routing via `on_call_schedules` lookup
+- [ ] Idempotency via `processed_events` check before dispatch
+
+---
+*Progress Tracking: Developer to update via Task Boundary comments as items hit "In Review" status.*

@@ -1,0 +1,56 @@
+# Master Task Tracking Artifact: Sprint 3
+
+**Objective:** Build the complete patient intake experience (offline-first, multilingual, consent-capturing) alongside the full SLA scheduling engine, status lifecycle validator, duplicate detection, and Wake-Up escalation protocol.
+
+---
+
+## 📅 Sprint 3: Complaint Intake, SLA & Workflow Engine
+
+### Task 3.1: Patient Intake UI — Offline-First & Zero-Friction
+*   [ ] Configure `next-pwa` Service Workers to aggressively cache all `/(patient)/intake` static assets.
+*   [ ] Implement **Dual-Phase PWA Background Sync**:
+    *   [ ] Phase 1: Sync text metadata first via `navigator.serviceWorker`.
+    *   [ ] Phase 2: Upload media payloads ONLY after `navigator.connection.effectiveType` indicates a 4G, 5G, or wifi connection.
+    *   [ ] Build Exponential Backoff engine for HTTP retry operations.
+*   [ ] Design the **IndexedDB CRDT Schema**:
+    *   [ ] Establish SHA-256 deduplication hashing (`patient_id` + `description` + `timestamp`).
+    *   [ ] Build offline UX: Submit button spinner -> "Queue for Sync" toast.
+*   [ ] Develop the single-column clinical intake form (min 48px touch targets, standard iOS/Android numeric pads).
+    *   [ ] Build multilingual architecture explicitly supporting:
+        *   English
+        *   Hindi
+        *   Bengali
+*   [ ] Implement the **Passwordless OTP bypass** flow (strictly using mock/fixed DB validation until Sprint 7).
+*   [ ] Construct the **DPDP/HIPAA Consent Module** constraint: mandate `patient_consents` table insertion before any `complaint_phi` ciphertext is written.
+*   [ ] Build the **QR Code Physical-to-Digital Bridge**:
+    *   [ ] Parse `?hospital_id=` UUID parameters from the Next.js routing context to prepopulate intake facility fields.
+
+### Task 3.2: Status Lifecycle Engine & Duplicate Merge
+*   [ ] Encode the absolute status state machine: `submitted` -> `acknowledged` -> `investigating` -> `resolved` -> `capa_validated` -> `closed`.
+    *   [ ] Enforce error boundaries: invalid transitions throw HTTP 400 and log to `audit_logs`.
+*   [ ] Implement **Duplicate Merge Logic**:
+    *   [ ] Build the 2-minute window query constraint for new submissions on the same `patient_id` (aligning with the 2-per-minute rate limit).
+    *   [ ] Utilize `pg_trgm` via SQL Edge Functions or Server Actions to compare text similarity.
+    *   [ ] Build the merge transaction: set `parent_complaint_id`, close the duplicate, and bypass the SLA timer engine for the child ticket.
+
+### Task 3.3: SLA Engine — Event-Driven Scheduling via Inngest
+*   [ ] Integrate the **Inngest Node SDK** into Next.js.
+*   [ ] Build the `scheduleSLA` function:
+    *   [ ] Query `sla_configurations` dynamically on complaint INSERT.
+    *   [ ] Calculate exact exact `sla_deadline` based on IST/global 24/7 calendar hours.
+    *   [ ] Dispatch `inngest.send()` with exact temporal scheduling (no cron polling).
+*   [ ] Build the `cancelSLA` handler: `inngest.cancel({ name: 'sla/deadline', id: complaint_id })` on early resolution.
+*   [ ] Implement OTel/SigNoz APM telemetry spans around the Inngest payload structures.
+
+### Task 3.4: Escalation Engine & 15-Minute Wake-Up Protocol
+*   [ ] Build the **Primary Breach Protocol**:
+    *   [ ] Upon Inngest SLA execution, INSERT the breach event into `sla_breach_log`.
+    *   [ ] Query the `on_call_schedules` to identify the active primary shift manager.
+    *   [ ] Generate and persist a single-use deep-link into the `notifications` table.
+*   [ ] Build the **15-Minute Wake-Up Protocol**:
+    *   [ ] The primary breach must dispatch a secondary Inngest job scheduled exactly `now() + 15m`.
+    *   [ ] If the deep-link is clicked prior (updating `notifications.status = 'Read'`), intercept and cancel the 15m wake-up job.
+    *   [ ] If the timer fires, identify the secondary manager, pivot the notification, and log the secondary escalation to `sla_breach_log`.
+
+---
+*Progress Tracking: Developer to update via Task Boundary comments as items hit "In Review" status.*

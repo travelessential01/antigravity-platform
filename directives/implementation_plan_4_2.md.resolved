@@ -1,0 +1,114 @@
+# Task 4.2 Implementation Plan: Supabase Realtime Subscriptions & WebSocket RLS
+
+## Goal
+Wire live WebSocket subscriptions into the staff dashboard so that SLA breaches, new complaints, and notifications appear instantly without page refresh — all enforced by Postgres Row Level Security over the WebSocket connection.
+
+---
+
+## Proposed Changes
+
+### Realtime Infrastructure
+
+#### [NEW] [realtime-subscriptions.ts](file:///c:/Application%20V4.0/src/lib/realtime-subscriptions.ts)
+
+Three typed subscription factories:
+
+```ts
+// 1. Complaints — metadata only (NEVER select PHI columns)
+subscribeToComplaints(supabase, departmentId?) →
+  supabase.channel('complaints-feed')
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'complaints',
+      filter: departmentId ? `department_id=eq.${departmentId}` : undefined
+    }, callback)
+
+// 2. Notifications — personal feed
+subscribeToNotifications(supabase, userId) →
+  supabase.channel('notifications-feed')
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'notifications',
+      filter: `recipient_id=eq.${userId}`
+    }, callback)
+
+// 3. Breaches — hospital-wide
+subscribeToBreaches(supabase, hospitalId) →
+  supabase.channel('breach-feed')
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'sla_breach_log'
+    }, callback)
+```
+
+- Each channel's `supabase` client carries the user's JWT
+- Supabase Realtime engine evaluates RLS policies using `auth.jwt()` claims
+
+---
+
+### Zustand Store Update
+
+#### [MODIFY] [useSlaStore.ts](file:///c:/Application%20V4.0/src/store/useSlaStore.ts)
+
+Add `hoist(complaintId)` method:
+```ts
+hoist: (complaintId: string) => set((state) => {
+  const idx = state.complaints.findIndex(c => c.id === complaintId);
+  if (idx === -1) return state;
+  const [hoisted] = state.complaints.splice(idx, 1);
+  return { complaints: [hoisted, ...state.complaints] };
+})
+```
+
+---
+
+### Dashboard Integration
+
+#### [MODIFY] [page.tsx](file:///c:/Application%20V4.0/src/app/(staff)/dashboard/page.tsx)
+
+```ts
+useEffect(() => {
+  const channel = subscribeToBreaches(supabase, session.hospitalId);
+  channel.on('INSERT', (payload) => {
+    useSlaStore.getState().hoist(payload.new.complaint_id);
+  });
+  channel.subscribe();
+  return () => { supabase.removeChannel(channel); };
+}, []);
+```
+
+---
+
+### Supabase Configuration
+
+#### [MODIFY] Supabase Docker [.env](file:///c:/Application%20V4.0/.env)
+- Ensure `ENABLE_REALTIME=true` is set
+- Verify `REALTIME_SECRET` matches the JWT secret
+
+#### SQL: Enable Realtime on tables
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE complaints;
+ALTER PUBLICATION supabase_realtime ADD TABLE notifications;
+ALTER PUBLICATION supabase_realtime ADD TABLE sla_breach_log;
+```
+
+---
+
+## RLS Scoping Matrix
+
+| Role | Table | Filter | Enforcement |
+|------|-------|--------|------------|
+| Ward Nurse | `complaints` | `department_id = auth.jwt()->department_id` | RLS policy |
+| Quality Coordinator | `complaints` | `hospital_id = auth.jwt()->hospital_id` | RLS policy |
+| Any user | `notifications` | `recipient_id = auth.uid()` | RLS policy |
+| Cross-tenant | All | `hospital_id ≠ jwt.hospital_id` → ZERO rows | RLS policy |
+
+---
+
+## Verification Plan
+
+### Automated
+1. INSERT into `sla_breach_log` → verify `useSlaStore.hoist()` fires within 500ms
+2. Subscribe as Ward Nurse → INSERT complaint in different department → verify ZERO events received
+3. Subscribe as Hospital A user → INSERT complaint in Hospital B → verify ZERO events received
+
+### Manual
+- Open two browser tabs (Nurse + Coordinator) → create breach → verify both receive event with appropriate scoping
+- Kill WebSocket → wait 5s → verify auto-reconnection

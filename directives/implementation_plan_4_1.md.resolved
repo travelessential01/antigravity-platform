@@ -1,0 +1,84 @@
+# Task 4.1 Implementation Plan: Zero-PHI Quality Dashboard & Staff Offline Resilience
+
+## Goal
+Build the staff-facing operational dashboard that surfaces complaint metadata without exposing PHI, enables ALE-decrypted detail modals, provides dynamic SLA configuration, and supports offline staff resolution via Yjs CRDTs.
+
+---
+
+## Proposed Changes
+
+### DataTable Component
+
+#### [NEW] [DataTable.tsx](file:///c:/Application%20V4.0/src/components/dashboard/DataTable.tsx)
+- Uses `@tanstack/react-table` with `useReactTable()` hook
+- Column definitions:
+  - `ticket_id` — UUID display (truncated)
+  - `department` — Text from joined `departments.name`
+  - `severity` — Shadcn `<Badge>` with HSL severity palette (`severity-critical`, `severity-high`, etc.)
+  - `sla_countdown` — Live countdown computed via `useEffect` interval: `sla_deadline - Date.now()`
+  - `status` — Workflow state badge
+  - `assigned_to` — Staff name from joined `users`
+  - `actions` — "View Details" button → opens PHI modal
+- **Critical SLA Hoisting:** Custom `sortingFn` that pushes rows where `sla_remaining < 7200000ms` (2h) to index 0
+- **Breach Styling:** Conditional `className` applies `border-l-4 border-red-600` + Framer Motion `<motion.div animate={{ opacity: [1, 0.4, 1] }} transition={{ repeat: Infinity, duration: 1.5 }} />`
+- **Color Independence:** Every severity level displays: colored badge + distinct icon (`AlertTriangle`, `AlertCircle`, `Info`) + text label (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`)
+
+#### [MODIFY] [page.tsx](file:///c:/Application%20V4.0/src/app/(staff)/dashboard/page.tsx)
+- Fetch complaints via Server Action (metadata only, zero PHI)
+- Render `<DataTable>` with fetched data
+- Pass `sla_deadline` for live countdown computation
+
+---
+
+### PHI Modal
+
+#### [NEW] [PhiModal.tsx](file:///c:/Application%20V4.0/src/components/dashboard/PhiModal.tsx)
+- Dialog overlay (Shadcn `<Dialog>`)
+- Before decryption: check `session.aal` — if `aal1`, show re-authentication prompt
+- On AAL2 confirmed: call [readComplaintPHI(complaintId)](file:///c:/Application%20V4.0/src/actions/complaints.ts#13-108) Server Action
+- Renders decrypted JSON fields: `description`, `reporter_name`, `reporter_contact`
+- Fire-and-forget `audit_reads` INSERT via service role Supabase client
+
+#### [MODIFY] [complaints.ts](file:///c:/Application%20V4.0/src/actions/complaints.ts)
+- No structural changes needed — [readComplaintPHI()](file:///c:/Application%20V4.0/src/actions/complaints.ts#13-108) already implements the full ALE pipeline
+
+---
+
+### Dynamic SLA Configuration
+
+#### [NEW] [page.tsx](file:///c:/Application%20V4.0/src/app/(admin)/settings/sla-config/page.tsx)
+- Two `<input type="range">` sliders with real-time numeric display
+- `max_acknowledgement_hours`: min=1, max=24, step=1
+- `max_resolution_hours`: min=1, max=720, step=1
+- Inline NABH validation: red warning if values exceed ceilings
+- Submit handler: Server Action → `UPDATE sla_configurations SET ... WHERE hospital_id = ?`
+- Post-save: `inngest.send({ name: "sla/config-updated", data: { hospitalId } })`
+
+#### [NEW] [slaConfigRefresh](file:///c:/Application%20V4.0/src/inngest/functions.ts) (append function)
+- Inngest function triggered by `sla/config-updated`
+- Executes `REFRESH MATERIALIZED VIEW CONCURRENTLY` on all SLA-related views
+
+---
+
+### Staff Offline CRDT
+
+#### [NEW] [yjs-sync.ts](file:///c:/Application%20V4.0/src/lib/yjs-sync.ts)
+- `createComplaintDoc(complaintId)` → returns `Y.Doc` instance
+- `Y.Text` type for resolution notes
+- Provider: `y-supabase` binding Yjs to a Supabase Realtime channel named `crdt:${complaintId}`
+- On connection lost: edits accumulate in local `Y.Doc`
+- On reconnect: Yjs awareness protocol merges deltas automatically
+
+---
+
+## Verification Plan
+
+### Automated
+1. Render DataTable with 20 mock complaints → verify column rendering
+2. Insert a `sla_deadline` in the past → verify breach animation activates
+3. Call [readComplaintPHI()](file:///c:/Application%20V4.0/src/actions/complaints.ts#13-108) → verify decrypted JSON matches original plaintext
+4. Save SLA config with `max_acknowledgement_hours = 25` → verify NABH rejection
+
+### Manual
+- Disconnect network → edit resolution notes → reconnect → verify Yjs delta sync
+- Open PHI modal → verify `audit_reads` row appears in database

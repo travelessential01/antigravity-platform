@@ -14,7 +14,7 @@ def generate_aes_key():
 def create_env_file():
     """Creates the necessary .env file with generated secrets for Supabase and Antigravity."""
     env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-    
+
     # Generate Secrets
     jwt_secret = generate_secure_string(64)
     anon_key = generate_secure_string(128) # In a real Supabase setup, this requires signing with the JWT secret
@@ -50,10 +50,10 @@ SIGNOZ_OTLP_ENDPOINT=http://localhost:4317
 # [WAL-G LOCAL STUB]
 WALG_S3_PREFIX=s3://local-dev-bucket/antigravity-walg
 """
-    
+
     with open(env_path, 'w') as f:
         f.write(env_content)
-    
+
     print(f"✅ Successfully generated development .env file at {env_path}")
     print("⚠️  WARNING: These are LOCAL development keys only. Never use in production.")
 

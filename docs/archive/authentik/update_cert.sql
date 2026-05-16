@@ -1,0 +1,59 @@
+UPDATE saml_providers SET metadata_xml = '<md:EntityDescriptor xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" ID="_a49063bbb4e9726ebff6689a0cfbf4237a94cb02cadcc0ae08a5d6bdae2b531c" entityID="http://localhost:8000/auth/v1"><ds:Signature>
+<ds:SignedInfo>
+<ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+<ds:Reference URI="#_a49063bbb4e9726ebff6689a0cfbf4237a94cb02cadcc0ae08a5d6bdae2b531c">
+<ds:Transforms>
+<ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+</ds:Transforms>
+<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+<ds:DigestValue>FLdmElwIE4lJXR76d9frdv1Qh9GCT6NW0LD4aE4Cs6Y=</ds:DigestValue>
+</ds:Reference>
+</ds:SignedInfo>
+<ds:SignatureValue>Jy8OX/wx25wpa8EIHgB5Nh49aIvvIyg8ePVP2H4GORFaMM0jRosF8WotNiRdpmjS
+XWIGbDBmMG206Lz0YME1lW8u15WB1iIjUSzHGMfjKlnsAouv2awaQyjGCtoYxuUI
+zAvND6YnFXDHl7CMVxan6psRj2vFMQ6C0cIsaqVuSQp+nVJJlDK/qWZOKnc2h2/M
+QvtJhgg8Ux/jibNg3QHr+Zhj+CtycGd3RrDRC+cAqMTYp4OHamhwTpzz8MM6jNBP
+aHh2zUqbEl+RjlYjZSgSKsAQeDfupNTF4L/AFwIlucx60gbMf61irp8JXl0BjdLg
+4h80lePheAVJisSie7tPJCGQu/ILmHqXJbqlgJhHJj6U0pYHyAImoADqhpZ5z5Hg
+E323wRoDgsL+2jVuJlczwBsREK5g0ZsFAJqpPU//PboiVgHXPVSX8Ku0wyyNn13C
+s6Lg7d8Ro/V2dFop4wAn4sl3/LW2IVbCuEv/ixglbkFE1mgmsPDyxd7lOEYfnIdr
+D9vRdr7Hu6T5nbBYEiebiqmCL/mh2SdXhZrPf8v7qKLbKT6CSnwhwjO1501GnfQg
+juRpIQe1Ny2Ot+rjTI52JT0M07+7ac8EIP+DStjAtRIyyHIPEjG7yXbm7cv0LOrV
+04dO8LiIpJGa9DyALGNtr7VoFkptqdhSEvMoPr7wPKw=</ds:SignatureValue>
+<ds:KeyInfo>
+<ds:X509Data>
+<ds:X509Certificate>MIIFUjCCAzqgAwIBAgIQViJBce82Q8aEqNdDiDpKaDANBgkqhkiG9w0BAQsFADAd
+MRswGQYDVQQDDBJhdXRoZW50aWsgMjAyNC4yLjEwHhcNMjYwMzA1MTQwNzA1WhcN
+MjcwMzA2MTQwNzA1WjBWMSowKAYDVQQDDCFhdXRoZW50aWsgU2VsZi1zaWduZWQg
+Q2VydGlmaWNhdGUxEjAQBgNVBAoMCWF1dGhlbnRpazEUMBIGA1UECwwLU2VsZi1z
+aWduZWQwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDJaL1fxbPvR9ea
+KbX59ikesAmOxVFaerFpwMrnAxzNIx4p6KpRlGnZRqWHFFD3mu386mnlvQJ42Hy9
+3QDD8rEZByL66wpTi3IDLfKxuSFBbRwGm8YgbZq3Lmqmq/lPLeF9Z0IOYHUpurdJ
+GGQabO4IuUo//c3gK4vx6bBPPRWGxrEstvin/964+Ag0W79AXDB/XknhEY793ayX
+mUUrf7LT83pkkyTRIv1AA3ozrjMSiXGRy6zlbRn+ff/fid3M8XlygMPRKC0wMMXS
+Pd2QDLarVR+Xp3w04WnQe4TeVBLvcLM/cPsnRDDJXnF2a4h6a0+b9N23IZDBLCsb
+DMIslX+z4BFDu0k3XeRhiqsiih1cIOU3wRT1R9fQIr8itGpNTFZdlKqIl7egoQ75
+2Ld3o6uwoy0RHwR1NZBw/x8qUTuRS1WFKEQifAD6gPnxqY9KHirWCc+diH5kptah
+STZ2wBgkPNHJWiiwMMAOn+LdS9QJJb6f3pQZumQX2nXPLjdg9vgj8CS/YdduLNIV
+3zHr7g+WvleK+RMCKk6nvzrXfTJGtnTauPgFPOzJvvPSqtxRC3YJ6eVltDpoEAaV
+2CkIbCcIITQuihiK8IJAay99RcWjzP9a5I0d5QIs/V0d7885OCBg0CzS2oFIqRKD
+6g41lYjjC6YzsiKpAvLMfRB5Mmi+fwIDAQABo1UwUzBRBgNVHREBAf8ERzBFgkNZ
+eVkwb3FmOTUxMVNDTmtJTGRzQlAyem9oSjdnYlBBSzhob1F4TUk3LnNlbGYtc2ln
+bmVkLmdvYXV0aGVudGlrLmlvMA0GCSqGSIb3DQEBCwUAA4ICAQDHNE2yWs75sO+9
+L37eYSnfyIUqclR3BG0ixQuLKkDNo/T71octVdL16e1Xz55fyEsaAZHVk5hxxIcp
+gkblO5vpYagdo8L/pd79NV4Ii0qwd+U4CLRq6wHUPH0STM0ca6V8OHrDzk2FAI/d
+WTcFzu4DShzojK0NWAFO9qCdJW9CHdRYUao8xJEuK7uF+btXoWBXskXzgislWKXj
+FYsm1jg1CwjRynt2E3BTDhjawD8dQLxstkVN/J06gp+BQ37fJBfPjoImBiuX2B/A
+UUK4MEShNpeNwynMHJv/hOiBl5wy5O75Jz3+3xyOba4ugThyWTgjVl+rTT5UhOpH
+WDYg4i4J1w9P/mdFZRwWMBNTpLe6AYvl28UiMUjHrq/lGW+bQkLPzKCNTp9PR/K1
+xT1tIa88s4aeqhOItRVptvg+LfuA3dJEksg6XUYpHW9HJ5pQJe/vvaztWIVede6s
+XlrL7MmHY33onycRCpmgnnw0uTotJztbh8p+lv3LdfrAeDmNwFjS6zNSYrLkOReh
+UaxZiMIx15uvj4QAQOvaX3AzYS3ZpcIb8wlS8Z6xD4qtdAnMz3bLjLZeBy7E+X7X
+AbpOLi16meOGu9oj1ZmCZcSkRDjahTVi4Nx3BBKnIpQwItCN6lTTulNfF9lD0f2O
++qZiMNiRUkst13CCDDyAvqwV07S89Q==
+</ds:X509Certificate>
+</ds:X509Data>
+</ds:KeyInfo>
+</ds:Signature><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:KeyDescriptor use="signing"><ds:KeyInfo><ds:X509Data><ds:X509Certificate>MIIFUjCCAzqgAwIBAgIQViJBce82Q8aEqNdDiDpKaDANBgkqhkiG9w0BAQsFADAdMRswGQYDVQQDDBJhdXRoZW50aWsgMjAyNC4yLjEwHhcNMjYwMzA1MTQwNzA1WhcNMjcwMzA2MTQwNzA1WjBWMSowKAYDVQQDDCFhdXRoZW50aWsgU2VsZi1zaWduZWQgQ2VydGlmaWNhdGUxEjAQBgNVBAoMCWF1dGhlbnRpazEUMBIGA1UECwwLU2VsZi1zaWduZWQwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDJaL1fxbPvR9eaKbX59ikesAmOxVFaerFpwMrnAxzNIx4p6KpRlGnZRqWHFFD3mu386mnlvQJ42Hy93QDD8rEZByL66wpTi3IDLfKxuSFBbRwGm8YgbZq3Lmqmq/lPLeF9Z0IOYHUpurdJGGQabO4IuUo//c3gK4vx6bBPPRWGxrEstvin/964+Ag0W79AXDB/XknhEY793ayXmUUrf7LT83pkkyTRIv1AA3ozrjMSiXGRy6zlbRn+ff/fid3M8XlygMPRKC0wMMXSPd2QDLarVR+Xp3w04WnQe4TeVBLvcLM/cPsnRDDJXnF2a4h6a0+b9N23IZDBLCsbDMIslX+z4BFDu0k3XeRhiqsiih1cIOU3wRT1R9fQIr8itGpNTFZdlKqIl7egoQ752Ld3o6uwoy0RHwR1NZBw/x8qUTuRS1WFKEQifAD6gPnxqY9KHirWCc+diH5kptahSTZ2wBgkPNHJWiiwMMAOn+LdS9QJJb6f3pQZumQX2nXPLjdg9vgj8CS/YdduLNIV3zHr7g+WvleK+RMCKk6nvzrXfTJGtnTauPgFPOzJvvPSqtxRC3YJ6eVltDpoEAaV2CkIbCcIITQuihiK8IJAay99RcWjzP9a5I0d5QIs/V0d7885OCBg0CzS2oFIqRKD6g41lYjjC6YzsiKpAvLMfRB5Mmi+fwIDAQABo1UwUzBRBgNVHREBAf8ERzBFgkNZeVkwb3FmOTUxMVNDTmtJTGRzQlAyem9oSjdnYlBBSzhob1F4TUk3LnNlbGYtc2lnbmVkLmdvYXV0aGVudGlrLmlvMA0GCSqGSIb3DQEBCwUAA4ICAQDHNE2yWs75sO+9L37eYSnfyIUqclR3BG0ixQuLKkDNo/T71octVdL16e1Xz55fyEsaAZHVk5hxxIcpgkblO5vpYagdo8L/pd79NV4Ii0qwd+U4CLRq6wHUPH0STM0ca6V8OHrDzk2FAI/dWTcFzu4DShzojK0NWAFO9qCdJW9CHdRYUao8xJEuK7uF+btXoWBXskXzgislWKXjFYsm1jg1CwjRynt2E3BTDhjawD8dQLxstkVN/J06gp+BQ37fJBfPjoImBiuX2B/AUUK4MEShNpeNwynMHJv/hOiBl5wy5O75Jz3+3xyOba4ugThyWTgjVl+rTT5UhOpHWDYg4i4J1w9P/mdFZRwWMBNTpLe6AYvl28UiMUjHrq/lGW+bQkLPzKCNTp9PR/K1xT1tIa88s4aeqhOItRVptvg+LfuA3dJEksg6XUYpHW9HJ5pQJe/vvaztWIVede6sXlrL7MmHY33onycRCpmgnnw0uTotJztbh8p+lv3LdfrAeDmNwFjS6zNSYrLkORehUaxZiMIx15uvj4QAQOvaX3AzYS3ZpcIb8wlS8Z6xD4qtdAnMz3bLjLZeBy7E+X7XAbpOLi16meOGu9oj1ZmCZcSkRDjahTVi4Nx3BBKnIpQwItCN6lTTulNfF9lD0f2O+qZiMNiRUkst13CCDDyAvqwV07S89Q==</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="http://localhost:9090/application/saml/antigravity-supabase/slo/binding/redirect/"/><md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="http://localhost:9090/application/saml/antigravity-supabase/slo/binding/post/"/><md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat><md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat><md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:X509SubjectName</md:NameIDFormat><md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:transient</md:NameIDFormat><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="http://localhost:9090/application/saml/antigravity-supabase/sso/binding/redirect/"/><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="http://localhost:9090/application/saml/antigravity-supabase/sso/binding/post/"/></md:IDPSSODescriptor></md:EntityDescriptor>' WHERE id = 'c2a666b8-f53c-4e57-8d28-95e3c2b85d91';

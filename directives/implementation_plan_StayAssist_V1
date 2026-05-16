@@ -1,0 +1,316 @@
+# StayAssist V1 Core MVP — Final Implementation Plan
+
+This is the canonical, approved implementation plan for hardening the StayAssist V1 Core MVP before staging deployment. All user decisions (a–h) are locked in. Session governance architecture is fully integrated.
+
+---
+
+## Final Decisions Summary
+
+| ID | Decision | Status |
+|:---|:---|:---|
+| **a** | Mock OTP `0000` retained until deployment | 🔒 Locked |
+| **b** | Secrets stay in `.env` until deployment; AWS Secrets Manager scaffolded | 🔒 Locked |
+| **c** | Drop `patient_id` FK → keep UUID column with CHECK constraint | 🔒 Locked |
+| **d** | JWT 30-min expiry + centralized `auth-guard.ts` with `requireUser/requireRole/requireMfa` | 🔒 Locked |
+| **e** | Dedicated `stayassist-redis` container on port 6380 | 🔒 Locked |
+| **f** | Add `key_version` column to `complaint_phi` | 🔒 Locked |
+| **g** | Completely remove offline-sync code from V1 | 🔒 Locked |
+| **h** | Strip all 11 OpenTelemetry packages from V1 | 🔒 Locked |
+| **i** | Centralized session governance with protected layouts, fixed auth flows, secured API routes | 🔒 Locked |
+
+---
+
+## Sprint A — Infrastructure, Security & Session Governance
+
+### A.1: Dedicated Redis Container for Rate Limiting
+**Goal:** Decouple StayAssist rate-limiting from Authentik's internal Redis.
+
+**Current State:**
+- [rate-limit.ts](file:///c:/Application%20V4.0/src/lib/rate-limit.ts) L4: `redis://localhost:6379` — connects to Authentik's Redis
+- [rate-limit-acknowledge.ts](file:///c:/Application%20V4.0/src/lib/rate-limit-acknowledge.ts) L12: same pattern
+
+**Changes:**
+1. **[NEW]** `docker-compose.stayassist.yml` — `stayassist-redis` on port 6380, password-protected, 128MB max, LRU eviction
+2. **[MODIFY]** `.env` — add `REDIS_URL`, `REDIS_PASSWORD`
+3. **[MODIFY]** `src/lib/rate-limit.ts` — new URL (6380), `lazyConnect`, fail-open catch
+4. **[MODIFY]** `src/lib/rate-limit-acknowledge.ts` — same changes
+
+**Acceptance Criteria:**
+- [ ] `docker ps` shows `stayassist-redis` on port 6380
+- [ ] Stopping Authentik Redis does NOT crash intake API
+- [ ] Rate limiting still blocks >2 complaints/min/patient when Redis is healthy
+
+---
+
+### A.2: Centralized Auth Guard — `auth-guard.ts`
+**Goal:** Replace 60+ lines of duplicated auth boilerplate across 6 files with a single composable guard utility. Enforce `is_active` DB check, role verification, and MFA assurance in one place.
+
+**Current State — Auth boilerplate duplicated in 6 files:**
+- [complaints.ts](file:///c:/Application%20V4.0/src/actions/complaints.ts) L29–53 — creates client, calls getSession, extracts role
+- [audit.ts](file:///c:/Application%20V4.0/src/actions/audit.ts) L13–38 — same pattern
+- [sla.ts](file:///c:/Application%20V4.0/src/actions/sla.ts) L27–49 — same pattern
+- [workflow.ts](file:///c:/Application%20V4.0/src/actions/workflow.ts) — same pattern
+- No file checks `is_active` or MFA AAL level in Server Actions
+
+**Changes:**
+1. **[NEW]** `src/lib/auth-guard.ts` — centralized module exporting:
+   - `createAuthenticatedClient()` — creates user-scoped Supabase client from cookies
+   - `requireUser()` — session + `is_active` DB check → returns `AuthenticatedUser`
+   - `requireRole(allowedRoles)` — above + role verification
+   - `requireMfa()` — above + AAL2 check
+   - `requirePrivileged(allowedRoles)` — role + MFA combined
+   - `AuthError` class with typed error codes (`UNAUTHORIZED`, `FORBIDDEN`, `DEACTIVATED`, `MFA_REQUIRED`)
+2. **[NEW]** SQL migration `029_add_is_active_column.sql` — add `is_active BOOLEAN DEFAULT true` to `users`
+3. **[MODIFY]** `.env` — set `JWT_EXPIRY=1800` (30 minutes)
+4. **[MODIFY]** `actions/complaints.ts` — replace 12-line boilerplate with `const user = await requireUser()`
+5. **[MODIFY]** `actions/audit.ts` — same replacement
+6. **[MODIFY]** `actions/sla.ts` — replace with `const user = await requireRole(['Admin'])`
+7. **[MODIFY]** `actions/workflow.ts` — replace with `requireUser()`
+
+**Acceptance Criteria:**
+- [ ] Setting `is_active = false` blocks PHI access with "Account deactivated"
+- [ ] All Server Actions use `auth-guard.ts` — zero raw `getSession()` calls in actions
+- [ ] Active users experience no disruption from JWT auto-refresh
+
+---
+
+### A.3: Strip All OpenTelemetry Packages
+**Goal:** Reduce bundle size, eliminate Webpack native-module conflicts, cut cold-start latency.
+
+**Current State:** 11 OTEL packages in [package.json](file:///c:/Application%20V4.0/package.json) L14–23, imported in 7 files.
+
+**Changes:**
+1. **[MODIFY]** `package.json` — remove all 11 `@opentelemetry/*` packages
+2. **[MODIFY]** `src/lib/telemetry.ts` — replace with no-op stubs
+3. **[DELETE]** `src/lib/otel-node-sdk.ts`
+4. **[MODIFY]** `src/instrumentation.ts` — remove OTEL dynamic import
+5. **[MODIFY]** 6 consumer files — remove OTEL imports, use no-op stubs from `telemetry.ts`
+6. **[DELETE]** `src/app/api/monitoring-test/route.ts`
+7. **[MODIFY]** `next.config.mjs` — remove OTEL entries from `serverExternalPackages`
+
+**Acceptance Criteria:**
+- [ ] `pnpm build` succeeds with zero OTEL warnings
+- [ ] No `@opentelemetry` string in dependencies
+
+---
+
+### A.4: Remove Offline-Sync Code & Dead Dependencies
+**Goal:** Remove non-functional offline sync engine, Service Worker, and alpha CRDT dependencies.
+
+**Current State:** 4 files to delete, 4 packages to remove, 3 files to modify.
+
+**Changes:**
+1. **[DELETE]** `src/lib/offline-sync.ts`, `src/lib/indexeddb-schema.ts`, `src/store/useOfflineQueueStore.ts`, `src/store/useCrdtStore.ts`
+2. **[MODIFY]** `IntakeForm.tsx` — remove offline imports, branches, QUEUED-OFFLINE UI, banner
+3. **[MODIFY]** `columns.tsx` — remove `useCrdtStore` import (placeholder for B.3 Server Action)
+4. **[MODIFY]** `next.config.mjs` — remove `next-pwa` and `withPWA` wrapper
+5. **[MODIFY]** `package.json` — remove `next-pwa`, `y-supabase`, `yjs`, `y-indexeddb`
+6. **[MODIFY]** `actions/complaints.ts` — remove `dedupHash` from schema
+
+**Acceptance Criteria:**
+- [ ] `pnpm build` succeeds with zero PWA/Yjs/offline warnings
+- [ ] Intake form submits directly online — no "QUEUED-OFFLINE" state reachable
+
+---
+
+### A.5: Fix Login Page — Replace Client-Side Cookie Synthesis with PKCE Flow
+**Goal:** Eliminate the XSS-exploitable, 400-day client-side session cookie hack and use the proper server-side auth callback.
+
+**Current State — CRITICAL SECURITY GAP:**
+- [login/page.tsx](file:///c:/Application%20V4.0/src/app/login/page.tsx) L41–97: manually writes Supabase session cookies via `document.cookie` with `max-age=34560000` (400 days!)
+- Bypasses `httpOnly` — session token is readable by any XSS payload
+- Reimplements `@supabase/ssr` cookie chunking logic — fragile
+
+**Changes:**
+1. **[MODIFY]** `src/app/login/page.tsx`:
+   - Change SSO redirect URL from `/login` to `/auth/callback` (PKCE flow)
+   - Remove the entire 60-line `onAuthStateChange` cookie synthesis block (L30–118)
+   - Parameterize `providerId` from env var (see A.6)
+   - Keep the SSO button and auto-initiate logic
+2. **[MODIFY]** `src/app/auth/callback/route.ts` — verify it correctly handles SSO PKCE redirects (already calls `exchangeCodeForSession` — should work)
+
+> [!WARNING]
+> Requires testing: the original cookie synthesis was a workaround for GoTrue 504 timeouts. If PKCE flow also 504s, fallback plan is a thin server API route that calls `setSession()` and sets `httpOnly` cookies.
+
+**Acceptance Criteria:**
+- [ ] SSO login completes via `/auth/callback` server-side — no `document.cookie` writes
+- [ ] Session cookies are `httpOnly` (not readable by JS)
+- [ ] Cookie max-age follows JWT expiry (30 min), not 400 days
+
+---
+
+### A.6: SSO Config to Environment Variables
+**Goal:** Remove hardcoded localhost URLs and provider UUIDs that will break on staging/production.
+
+**Current State:**
+- [login/page.tsx](file:///c:/Application%20V4.0/src/app/login/page.tsx) L16: `providerId: '0bafa784-84f5-4dc8-80e8-abb8c8ce6ae7'` — hardcoded
+- [login/page.tsx](file:///c:/Application%20V4.0/src/app/login/page.tsx) L18: `redirectTo: 'http://localhost:3000/login'` — hardcoded localhost
+
+**Changes:**
+1. **[MODIFY]** `src/app/login/page.tsx` — replace hardcoded values with env vars:
+   ```typescript
+   providerId: process.env.NEXT_PUBLIC_SSO_PROVIDER_ID!,
+   redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
+   ```
+2. **[MODIFY]** `.env` — add:
+   ```
+   NEXT_PUBLIC_SSO_PROVIDER_ID=0bafa784-84f5-4dc8-80e8-abb8c8ce6ae7
+   NEXT_PUBLIC_SITE_URL=http://localhost:3000
+   ```
+
+**Acceptance Criteria:**
+- [ ] Zero hardcoded URLs or UUIDs in `login/page.tsx`
+- [ ] SSO works across localhost, staging, and production by changing `.env`
+
+---
+
+### A.7: Protected Route Group Layouts
+**Goal:** Add server-side auth gates to route groups so unauthorized users are blocked before any page code runs.
+
+**Current State — route groups exist but have NO layout guards:**
+- `(admin)/` — org-dashboard, faq-management — **no auth**
+- `(dpo)/` — investigator page — **no auth**
+- `(staff)/` — dashboard — only middleware `/dashboard` prefix check
+
+**Changes:**
+1. **[NEW]** `src/app/(admin)/layout.tsx`:
+   ```typescript
+   import { requireRole } from '@/lib/auth-guard'
+   export default async function AdminLayout({ children }) {
+       await requireRole(['Admin', 'Medical Superintendent'])
+       return <>{children}</>
+   }
+   ```
+2. **[NEW]** `src/app/(dpo)/layout.tsx`:
+   ```typescript
+   import { requirePrivileged } from '@/lib/auth-guard'
+   export default async function DPOLayout({ children }) {
+       await requirePrivileged(['DPO', 'Admin'])
+       return <>{children}</>
+   }
+   ```
+3. **[NEW]** `src/app/(staff)/layout.tsx`:
+   ```typescript
+   import { requireUser } from '@/lib/auth-guard'
+   export default async function StaffLayout({ children }) {
+       await requireUser()
+       return <>{children}</>
+   }
+   ```
+
+**Acceptance Criteria:**
+- [ ] Navigating to `/org-dashboard` without Admin role → error/redirect
+- [ ] Navigating to `/investigator` without DPO role + MFA → error/redirect
+- [ ] Deactivated staff cannot access any staff pages
+
+---
+
+### A.8: Secure Unprotected API Routes
+**Goal:** Add auth checks to API routes that are currently open to the internet.
+
+**Current State — 2 routes with ZERO auth:**
+
+| Route | File | Gap |
+|:------|:-----|:----|
+| `GET /api/hospitals` | [hospitals/route.ts](file:///c:/Application%20V4.0/src/app/api/hospitals/route.ts) L7 | Comment says "No auth guard" |
+| `POST/PUT/DELETE /api/faqs` | [faqs/route.ts](file:///c:/Application%20V4.0/src/app/api/faqs/route.ts) L43–116 | Full CRUD with zero auth |
+
+**Changes:**
+1. **[MODIFY]** `src/app/api/hospitals/route.ts` — add `requireRole(['Admin'])` guard or restrict to dev via `NODE_ENV`
+2. **[MODIFY]** `src/app/api/faqs/route.ts`:
+   - `GET` remains unauthenticated (FAQs are public-facing)
+   - `POST`, `PUT`, `DELETE` — add `requireRole(['Admin'])` guard
+   - Replace service-role client with user-scoped client for write operations
+
+**Acceptance Criteria:**
+- [ ] `curl /api/hospitals` without auth → 401
+- [ ] `curl -X POST /api/faqs` without auth → 401
+- [ ] `GET /api/faqs` still works without auth (public)
+
+---
+
+### A.9: Remove Service-Role from User-Facing Render Paths
+**Goal:** Prevent RLS bypass on pages that render for authenticated users.
+
+**Current State — service-role used without session check on render paths:**
+
+| File | Line | Risk |
+|:-----|:-----|:-----|
+| [org-dashboard/page.tsx](file:///c:/Application%20V4.0/src/app/%28admin%29/org-dashboard/page.tsx) L17–20 | 🔴 Queries 5 materialized views with service-role, no auth |
+| [ssr-transparency-widget.tsx](file:///c:/Application%20V4.0/src/components/widgets/ssr-transparency-widget.tsx) L10–12 | 🟡 Reads aggregate compliance stat — low risk |
+
+**Changes:**
+1. **[MODIFY]** `src/app/(admin)/org-dashboard/page.tsx`:
+   - Remove `createClient(URL, SERVICE_ROLE_KEY)` (L17–20)
+   - Replace with `const supabase = await createAuthenticatedClient()` from `auth-guard.ts`
+   - Auth enforced by the `(admin)/layout.tsx` guard (A.7)
+2. **[NO CHANGE]** `ssr-transparency-widget.tsx` — acceptable exception: reads only public aggregate SLA percentage, no PHI. Add documenting comment.
+
+**Acceptance Criteria:**
+- [ ] `org-dashboard` queries execute with user RLS, not service-role bypass
+- [ ] Admin data is not visible to unauthenticated visitors
+
+---
+
+## Sprint B — Database Integrity & Core Compliance
+
+### B.1: Drop `patient_id` Foreign Key Constraint
+**Goal:** Enable anonymous QR-code complaint submissions.
+
+**Changes:**
+1. **[NEW]** `database/migrations/030_drop_patient_fk.sql` — DROP FK + ADD UUID format CHECK
+
+**Acceptance Criteria:**
+- [ ] Anonymous patient UUID INSERT succeeds
+- [ ] Malformed non-UUID INSERT fails
+
+---
+
+### B.2: Add `key_version` Column for AES Key Rotation
+**Goal:** Enable future zero-downtime rolling encryption key rotation for PHI.
+
+**Changes:**
+1. **[NEW]** `database/migrations/031_add_key_version.sql` — add `key_version INTEGER DEFAULT 1` to `complaint_phi`
+2. **[MODIFY]** `actions/complaints.ts` `createComplaint` — write `key_version: 1` on PHI insert
+3. **[MODIFY]** `actions/complaints.ts` `readComplaintPHI` — read `key_version`, select key dynamically
+
+**Acceptance Criteria:**
+- [ ] New PHI records tagged `key_version = 1`
+- [ ] Adding `AES_KEY_V2` to `.env` decrypts old v1 records correctly
+
+---
+
+### B.3: Server-Side Complaint Resolution
+**Goal:** Make the "Resolve" button write to PostgreSQL and trigger the audit ledger.
+
+**Changes:**
+1. **[NEW]** `resolveComplaint()` Server Action in `actions/complaints.ts` — uses `requireUser()` from auth-guard
+2. **[MODIFY]** `columns.tsx` — replace `resolveComplaintLocally` CRDT call with `resolveComplaint` Server Action
+
+**Acceptance Criteria:**
+- [ ] Click Resolve → `complaints.status = 'resolved'` in DB
+- [ ] `complaint_status_history` audit entry created
+- [ ] Page refresh still shows resolved
+
+---
+
+## Sprint C — Pre-Deployment Stage Gating
+
+### C.1: Retain Mock OTP
+No changes. `IntakeForm.tsx` L62: `if (otpCode === '0000')` is untouched.
+
+### C.2: Secrets Management — `.env` Retention + AWS SM Scaffold
+1. **[NEW]** `src/lib/aws-secrets.ts` — inactive scaffold with `.env` fallback
+2. **[NEW]** `.env.example` — document all required env vars
+
+---
+
+## Effort Estimate
+
+| Sprint | Tasks | Estimated Hours |
+|:---|:---|:---|
+| **A.1–A.4** | Redis + Auth guard + OTEL strip + Offline removal | ~18h |
+| **A.5–A.9** | Cookie fix + SSO env + Protected layouts + API auth + Service-role removal | ~11.5h |
+| **B** | FK drop + Key versioning + Server-side resolve | ~8h |
+| **C** | OTP retain + Secrets scaffold | ~2h |
+| **Total** | | **~39.5h** |

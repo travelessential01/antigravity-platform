@@ -9,7 +9,13 @@ rules:
   # =============================================================
   - id: antigravity-no-pgcrypto-phi
     patterns:
-      - pattern: pgp_sym_encrypt(...)
+      - pattern-regex: (?im)^[ \t]*(?!--).*\bpgp_sym_encrypt\s*\(
+    paths:
+      include:
+        - database/**/*.sql
+        - src/**/*.ts
+        - src/**/*.tsx
+        - scripts/**/*.mjs
     message: |
       BLOCKED: pgp_sym_encrypt() detected. PHI columns in complaint_phi
       must use Application-Level Encryption (AES-256-GCM) in Next.js
@@ -105,20 +111,18 @@ rules:
   # =============================================================
   - id: antigravity-phi-without-dept-check
     patterns:
-      - pattern: |
-          ...complaint_phi...
-      - pattern-not: |
-          ...department_id...
-          ...complaint_phi...
-      - pattern-not: |
-          ...departmentId...
-          ...complaint_phi...
+      - pattern-regex: complaint_phi
+      - pattern-not-regex: (?s)(department_id|departmentId).*complaint_phi
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
     message: |
       WARNING: complaint_phi access detected without department_id claim
       validation. Server Actions accessing PHI must validate the JWT
       department claim against complaints.department_id BEFORE ALE
       decryption. See: Task 2.4 ALE PHI Access Pattern.
-    languages: [typescript, javascript]
+    languages: [generic]
     severity: WARNING
     metadata:
       category: security

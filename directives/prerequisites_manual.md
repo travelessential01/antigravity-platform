@@ -13,7 +13,7 @@ These tasks involve government regulations, high-level enterprise security, or f
 *   **Action Steps (Before Production):**
     1.  Register the Hospital Entity on a DLT portal (e.g., Jio, Airtel, Vodafone Idea, or BSNL).
     2.  Register Header/Sender IDs (e.g., `HOSPIT`, `ANTIGV`).
-    3.  Register precise SMS Content Templates. 
+    3.  Register precise SMS Content Templates.
         *   *Example Template:* `Dear {#var#}, your grievance ID {#var#} has been registered. View details: {#var#} - Hospital Name`
     4.  Obtain the **DLT Template IDs** for each approved template.
 *   **Handoff:** Provide these DLT Template IDs to the Development Team (Agent 7 - DevOps) to embed in the MSG91/Twilio payload during production deployment.
@@ -48,7 +48,7 @@ The development team (Agents) can write Terraform/AWS CLI scripts to automate th
 ### 2. APM & SMS Integration Keys
 *   **Why:** For monitoring SLA queues, detecting ledger tampering, and sending escalation SMS messages.
 *   **What You Must Provide:**
-    *   **PagerDuty Integration Key:** (For the Supabase webhook to trigger tamper alerts).
-    *   **SigNoz API Token:** (If using SigNoz cloud instead of self-hosting it).
-    *   **MSG91 / Twilio API Keys:** (For SMS gateway routing).
-*   **Agent Action:** Once provided, the agents will inject these into the `.env` configuration payload and test the webhooks.
+    *   **PagerDuty Integration Key:** ✅ Provided — Events API v2 routing key configured in `.env` as `PAGERDUTY_ROUTING_KEY`.
+    *   **SigNoz API Token:** ✅ Not needed — using SigNoz Community Edition (self-hosted via Docker Compose).
+    *   **MSG91 / Twilio API Keys:** 🟡 Deferred to production (OTP bypass in effect for Sprints 1-7).
+*   **Agent Action:** PagerDuty validated (HTTP 202). SigNoz CE deployed on ports 3301/4317/4318.

@@ -1,0 +1,686 @@
+# StayAssist V1 — Codestack & Architectural Change Log
+
+Every file touched in the V1 remediation sprint. Session governance (A.5–A.9) fully integrated.
+
+Legend: **[NEW]** = new file · **[MODIFY]** = changed file · **[DELETE]** = removed file
+
+---
+
+## Sprint A.1 — Redis Isolation
+
+### [NEW] `docker-compose.stayassist.yml`
+
+```yaml
+version: "3.8"
+services:
+  stayassist-redis:
+    container_name: stayassist-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - stayassist-redis-data:/data
+volumes:
+  stayassist-redis-data:
+    driver: local
+```
+
+### [MODIFY] `.env` — Additions across A.1, A.2, A.6
+
+```diff
++ REDIS_URL=redis://:your_strong_password@localhost:6380
++ REDIS_PASSWORD=your_strong_password
++ JWT_EXPIRY=1800
++ NEXT_PUBLIC_SSO_PROVIDER_ID=0bafa784-84f5-4dc8-80e8-abb8c8ce6ae7
++ NEXT_PUBLIC_SITE_URL=http://localhost:3000
+```
+
+### [MODIFY] `src/lib/rate-limit.ts`
+
+**Before (L1–4):**
+```typescript
+import Redis from 'ioredis'
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379')
+```
+
+**After:**
+```typescript
+import Redis from 'ioredis'
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6380', {
+    lazyConnect: true,
+    connectTimeout: 1000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+})
+redis.on('error', (err) => {
+    console.error('[stayassist-redis] Connection error:', err.message)
+})
+```
+
+**Catch block → fail-open:**
+```diff
+- return { success: false, error: 'Internal server error validating rate limit' }
++ console.error('[stayassist-redis] Rate limit unavailable, allowing request:', error)
++ return { success: true }
+```
+
+### [MODIFY] `src/lib/rate-limit-acknowledge.ts`
+Same Redis connection + fail-open changes.
+
+---
+
+## Sprint A.2 — Centralized Auth Guard
+
+### [NEW] `database/migrations/029_add_is_active_column.sql`
+
+```sql
+ALTER TABLE public.users
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+COMMENT ON COLUMN public.users.is_active IS
+    'Soft-deactivation flag. Staff set to false lose PHI access within JWT expiry window (30 min).';
+```
+
+### [NEW] `src/lib/auth-guard.ts` — Full implementation
+
+```typescript
+import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export interface AuthenticatedUser {
+    id: string
+    email: string
+    role: string
+    departmentId: string | null
+    hospitalId: string | null
+    isActive: boolean
+    aal: 'aal1' | 'aal2'
+}
+
+export class AuthError extends Error {
+    constructor(
+        public code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'DEACTIVATED' | 'MFA_REQUIRED',
+        message: string
+    ) {
+        super(message)
+        this.name = 'AuthError'
+    }
+}
+
+// ── Client Factory ───────────────────────────────────────────────────────────
+
+/**
+ * Creates a user-scoped Supabase client from cookies.
+ * ALWAYS prefer this over createClient(URL, SERVICE_ROLE_KEY) in user-facing code.
+ */
+export async function createAuthenticatedClient() {
+    const cookieStore = await cookies()
+    return createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+            cookies: {
+                get: (name: string) => cookieStore.get(name)?.value,
+                set: (name: string, value: string, options: CookieOptions) =>
+                    cookieStore.set({ name, value, ...options }),
+                remove: (name: string, options: CookieOptions) =>
+                    cookieStore.delete({ name, ...options }),
+            },
+        }
+    )
+}
+
+// ── Guards ────────────────────────────────────────────────────────────────────
+
+/**
+ * Requires an authenticated, active user.
+ * Uses DB check instead of getUser() to avoid GoTrue 504 timeouts.
+ */
+export async function requireUser(): Promise<AuthenticatedUser> {
+    const supabase = await createAuthenticatedClient()
+    const { data: { session }, error } = await supabase.auth.getSession()
+
+    if (error || !session?.user) {
+        throw new AuthError('UNAUTHORIZED', 'No active session')
+    }
+
+    const user = session.user
+    const role = (user.app_metadata?.app_role ?? user.app_metadata?.role ?? '') as string
+    const departmentId = (user.app_metadata?.department_id ?? null) as string | null
+    const hospitalId = (user.app_metadata?.hospital_id ?? null) as string | null
+
+    // DB active check — fast PostgreSQL query, no GoTrue network call
+    const { data: activeUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('id', user.id)
+        .eq('is_active', true)
+        .single()
+
+    if (!activeUser) {
+        throw new AuthError('DEACTIVATED', 'Account deactivated. Contact your administrator.')
+    }
+
+    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    const aal = (aalData?.currentLevel ?? 'aal1') as 'aal1' | 'aal2'
+
+    return { id: user.id, email: user.email!, role, departmentId, hospitalId, isActive: true, aal }
+}
+
+/**
+ * Requires user to have one of the specified roles.
+ */
+export async function requireRole(allowedRoles: string[]): Promise<AuthenticatedUser> {
+    const user = await requireUser()
+    const normalizedRole = user.role.toLowerCase()
+    const normalizedAllowed = allowedRoles.map(r => r.toLowerCase())
+
+    if (!normalizedAllowed.includes(normalizedRole)) {
+        throw new AuthError('FORBIDDEN',
+            `Role '${user.role}' not authorized. Required: ${allowedRoles.join(', ')}`)
+    }
+    return user
+}
+
+/**
+ * Requires AAL2 (MFA challenge completed).
+ */
+export async function requireMfa(): Promise<AuthenticatedUser> {
+    const user = await requireUser()
+    if (user.aal !== 'aal2') {
+        throw new AuthError('MFA_REQUIRED', 'MFA challenge required for this action')
+    }
+    return user
+}
+
+/**
+ * Requires MFA + specific role. For the most sensitive operations (PHI, admin).
+ */
+export async function requirePrivileged(allowedRoles: string[]): Promise<AuthenticatedUser> {
+    const user = await requireRole(allowedRoles)
+    if (user.aal !== 'aal2') {
+        throw new AuthError('MFA_REQUIRED', 'MFA required for privileged operations')
+    }
+    return user
+}
+```
+
+### [MODIFY] `src/actions/complaints.ts` — Replace boilerplate (L29–53 region)
+
+**Before (readComplaintPHI — 12 lines):**
+```typescript
+const cookieStore = await cookies()
+const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name) { ... }, set(name, value, options) { ... }, remove(name, options) { ... } } }
+)
+const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+if (sessionError || !session?.user) { return { success: false, error: "Unauthorized" } }
+const userId = session.user.id
+const departmentId = session.user.app_metadata?.department_id
+if (!departmentId) { return { success: false, error: "Missing department clearance" } }
+```
+
+**After (2 lines):**
+```typescript
+import { requireUser, createAuthenticatedClient, AuthError } from '@/lib/auth-guard'
+// ...
+const user = await requireUser()
+const supabase = await createAuthenticatedClient()
+```
+
+**Same pattern applied to:** `actions/audit.ts`, `actions/sla.ts` (using `requireRole(['Admin'])`), `actions/workflow.ts`
+
+---
+
+## Sprint A.3 — OpenTelemetry Removal
+
+### [MODIFY] `package.json` — Remove 11 `@opentelemetry/*` packages
+
+### [MODIFY] `src/lib/telemetry.ts` — Replace with no-op stubs (47→14 lines)
+
+```typescript
+/**
+ * Telemetry no-ops — V1. OTEL stripped for build stability.
+ */
+export function initTelemetry() {}
+const noOpCounter = { add: () => {} }
+const noOpHistogram = { record: () => {} }
+export const inngestQueueDepthCounter = noOpCounter as any
+export const slaBreachCounter = noOpCounter as any
+export const auditLogIntegrityCounter = noOpCounter as any
+export const decryptionLatencyHistogram = noOpHistogram as any
+export const serverActionErrorCounter = noOpCounter as any
+```
+
+### [DELETE] `src/lib/otel-node-sdk.ts`
+
+### [MODIFY] `src/instrumentation.ts` — Remove OTEL dynamic import (L7)
+
+### [MODIFY] 6 consumer files — Remove `@opentelemetry/api` imports, use no-op stubs
+
+### [DELETE] `src/app/api/monitoring-test/route.ts`
+
+### [MODIFY] `next.config.mjs` — Remove OTEL from `serverExternalPackages`
+
+---
+
+## Sprint A.4 — Offline-Sync Removal
+
+### [DELETE] `src/lib/offline-sync.ts`, `src/lib/indexeddb-schema.ts`, `src/store/useOfflineQueueStore.ts`, `src/store/useCrdtStore.ts`
+
+### [MODIFY] `src/app/(patient)/intake/IntakeForm.tsx`
+- Remove `useOfflineQueueStore` import (L6) and usage (L35)
+- Remove entire `if (isOffline)` branch (L85–97)
+- Remove QUEUED-OFFLINE success screen (L127–136)
+- Remove offline banner (L150–154)
+- Update i18n strings — remove "offline-first" wording
+
+### [MODIFY] `src/components/dashboard/columns.tsx`
+- Remove `useCrdtStore` import (L6) — placeholder for B.3
+
+### [MODIFY] `next.config.mjs` — Remove `next-pwa` wrapper + `yjs`/`y-indexeddb` externals
+
+### [MODIFY] `package.json` — Remove `next-pwa`, `y-supabase`, `yjs`, `y-indexeddb`
+
+### [MODIFY] `actions/complaints.ts` — Remove `dedupHash` from schema (L182) and body (L191)
+
+---
+
+## Sprint A.5 — Fix Login Cookie Synthesis
+
+### [MODIFY] `src/app/login/page.tsx` — Major refactor (160→~60 lines)
+
+**DELETE — entire cookie synthesis block (L30–118, ~90 lines):**
+```diff
+- useEffect(() => {
+-     const isCallback = window.location.hash.includes('access_token');
+-     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+-         if (session && (event === 'SIGNED_IN' || ...)) {
+-             // 60 lines of document.cookie writing, chunking, etc.
+-             document.cookie = `${storageKey}=${encoded}; ${cookieOpts}`;
+-             // ...
+-             window.location.href = '/dashboard';
+-         }
+-         if (event === 'INITIAL_SESSION' && !session && !isCallback && !ssoInitiated.current) {
+-             ssoInitiated.current = true;
+-             setTimeout(() => handleSSOLogin(), 500);
+-         }
+-     });
+-     return () => { subscription.unsubscribe(); };
+- }, [...]);
+```
+
+**REPLACE with simplified auto-initiate:**
+```typescript
+useEffect(() => {
+    // Check if already authenticated
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+            router.push('/dashboard')
+            return
+        }
+        // No session — auto-initiate SSO
+        if (!ssoInitiated.current) {
+            ssoInitiated.current = true
+            handleSSOLogin()
+        }
+    })
+}, [supabase, router, handleSSOLogin])
+```
+
+**MODIFY — SSO redirect target (L15–20):**
+```diff
+  const { data, error } = await supabase.auth.signInWithSSO({
+-     providerId: '0bafa784-84f5-4dc8-80e8-abb8c8ce6ae7',
++     providerId: process.env.NEXT_PUBLIC_SSO_PROVIDER_ID!,
+      options: {
+-         redirectTo: 'http://localhost:3000/login'
++         redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`
+      }
+  });
+```
+
+**Architectural Impact:**
+- SSO PKCE flow now routes through [auth/callback/route.ts](file:///c:/Application%20V4.0/src/app/auth/callback/route.ts) which calls `exchangeCodeForSession()` server-side
+- Cookies are set by `@supabase/ssr` with `httpOnly` — not readable by XSS
+- Cookie lifetime follows JWT/GoTrue settings, not the hardcoded 400 days
+- No more reimplemented cookie chunking logic
+
+---
+
+## Sprint A.6 — SSO Config to Env Vars
+
+### [MODIFY] `src/app/login/page.tsx` (covered in A.5 diff above)
+
+Hardcoded → env var mapping:
+```
+'0bafa784-84f5-4dc8-80e8-abb8c8ce6ae7' → process.env.NEXT_PUBLIC_SSO_PROVIDER_ID!
+'http://localhost:3000/login'           → `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`
+```
+
+---
+
+## Sprint A.7 — Protected Route Group Layouts
+
+### [NEW] `src/app/(admin)/layout.tsx`
+
+```typescript
+import { requireRole, AuthError } from '@/lib/auth-guard'
+import { redirect } from 'next/navigation'
+
+export default async function AdminLayout({
+    children,
+}: {
+    children: React.ReactNode
+}) {
+    try {
+        await requireRole(['Admin', 'Medical Superintendent'])
+    } catch (error) {
+        if (error instanceof AuthError) {
+            if (error.code === 'UNAUTHORIZED') redirect('/login')
+            if (error.code === 'DEACTIVATED') redirect('/login?error=deactivated')
+            if (error.code === 'FORBIDDEN') redirect('/dashboard?error=forbidden')
+            if (error.code === 'MFA_REQUIRED') redirect('/auth/mfa/challenge')
+        }
+        redirect('/login')
+    }
+    return <>{children}</>
+}
+```
+
+### [NEW] `src/app/(dpo)/layout.tsx`
+
+```typescript
+import { requirePrivileged, AuthError } from '@/lib/auth-guard'
+import { redirect } from 'next/navigation'
+
+export default async function DPOLayout({
+    children,
+}: {
+    children: React.ReactNode
+}) {
+    try {
+        await requirePrivileged(['DPO', 'Admin'])
+    } catch (error) {
+        if (error instanceof AuthError) {
+            if (error.code === 'UNAUTHORIZED') redirect('/login')
+            if (error.code === 'DEACTIVATED') redirect('/login?error=deactivated')
+            if (error.code === 'FORBIDDEN') redirect('/dashboard?error=forbidden')
+            if (error.code === 'MFA_REQUIRED') redirect('/auth/mfa/challenge')
+        }
+        redirect('/login')
+    }
+    return <>{children}</>
+}
+```
+
+### [NEW] `src/app/(staff)/layout.tsx`
+
+```typescript
+import { requireUser, AuthError } from '@/lib/auth-guard'
+import { redirect } from 'next/navigation'
+
+export default async function StaffLayout({
+    children,
+}: {
+    children: React.ReactNode
+}) {
+    try {
+        await requireUser()
+    } catch (error) {
+        if (error instanceof AuthError) {
+            if (error.code === 'UNAUTHORIZED') redirect('/login')
+            if (error.code === 'DEACTIVATED') redirect('/login?error=deactivated')
+        }
+        redirect('/login')
+    }
+    return <>{children}</>
+}
+```
+
+---
+
+## Sprint A.8 — Secure Unprotected API Routes
+
+### [MODIFY] `src/app/api/hospitals/route.ts`
+
+**Before (L16–20):**
+```typescript
+export async function GET() {
+    const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+```
+
+**After:**
+```typescript
+import { requireRole, createAuthenticatedClient, AuthError } from '@/lib/auth-guard'
+
+export async function GET() {
+    try {
+        await requireRole(['Admin'])
+    } catch (error) {
+        if (error instanceof AuthError) {
+            return NextResponse.json({ error: error.message }, { status: error.code === 'UNAUTHORIZED' ? 401 : 403 })
+        }
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const supabase = await createAuthenticatedClient()
+    // ... rest unchanged, now queries with RLS ...
+```
+
+### [MODIFY] `src/app/api/faqs/route.ts`
+
+**GET — unchanged (public).**
+
+**POST/PUT/DELETE — add auth guard:**
+```typescript
+import { requireRole, createAuthenticatedClient, AuthError } from '@/lib/auth-guard'
+
+// Helper for auth in API routes
+async function requireAdminForApi() {
+    try {
+        const user = await requireRole(['Admin'])
+        return { user, error: null }
+    } catch (error) {
+        if (error instanceof AuthError) {
+            return { user: null, error: NextResponse.json(
+                { error: error.message },
+                { status: error.code === 'UNAUTHORIZED' ? 401 : 403 }
+            ) }
+        }
+        return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+    }
+}
+
+export async function POST(request: NextRequest) {
+    const { user, error } = await requireAdminForApi()
+    if (error) return error
+    // ... rest of POST with createAuthenticatedClient() ...
+}
+
+export async function PUT(request: NextRequest) {
+    const { user, error } = await requireAdminForApi()
+    if (error) return error
+    // ... rest of PUT ...
+}
+
+export async function DELETE(request: NextRequest) {
+    const { user, error } = await requireAdminForApi()
+    if (error) return error
+    // ... rest of DELETE ...
+}
+```
+
+---
+
+## Sprint A.9 — Remove Service-Role from Render Paths
+
+### [MODIFY] `src/app/(admin)/org-dashboard/page.tsx`
+
+**Before (L1, L16–20):**
+```typescript
+import { createClient } from "@supabase/supabase-js";
+// ...
+export default async function AdminDashboardPage() {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!    // ← service-role, no auth
+  );
+```
+
+**After:**
+```typescript
+import { createAuthenticatedClient } from '@/lib/auth-guard'
+// Auth enforced by (admin)/layout.tsx — requireRole(['Admin', 'Medical Superintendent'])
+export default async function AdminDashboardPage() {
+  // User-scoped client with RLS — session already verified by layout guard
+  const supabase = await createAuthenticatedClient()
+```
+
+> [!NOTE]
+> RLS policies on the materialized views (`mv_org_sla_compliance`, `mv_org_complaint_trends`, etc.) must allow Admin-role reads. If RLS blocks the queries, add `GRANT SELECT ON mv_* TO authenticated` or policy for admin role.
+
+### [NO CHANGE] `src/components/widgets/ssr-transparency-widget.tsx`
+
+**Add documenting comment (L8):**
+```diff
+  // Use service role to interact directly with the DB without RLS in a server component.
++ // ACCEPTABLE EXCEPTION: This widget reads only public aggregate SLA compliance stats
++ // (no PHI, no PII). It is designed for public hospital embed pages.
+  // In a real embed, you might restrict CORS to only the hospital's public domains.
+```
+
+---
+
+## Sprint B.1 — FK Constraint Drop
+
+### [NEW] `database/migrations/030_drop_patient_fk.sql`
+```sql
+ALTER TABLE public.complaints DROP CONSTRAINT IF EXISTS complaints_patient_id_fkey;
+ALTER TABLE public.complaints ADD CONSTRAINT patient_id_uuid_format
+    CHECK (patient_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+```
+
+---
+
+## Sprint B.2 — Key Versioning
+
+### [NEW] `database/migrations/031_add_key_version.sql`
+```sql
+ALTER TABLE public.complaint_phi ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1;
+```
+
+### [MODIFY] `actions/complaints.ts` — `createComplaint` PHI insert + `readComplaintPHI` key selection
+(See previous codestack version for full diffs — unchanged)
+
+---
+
+## Sprint B.3 — Server-Side Resolution
+
+### [MODIFY] `src/actions/complaints.ts` — New `resolveComplaint` using auth-guard
+
+```typescript
+import { requireUser, createAuthenticatedClient } from '@/lib/auth-guard'
+
+export async function resolveComplaint(input: z.infer<typeof resolveSchema>) {
+    const parsed = resolveSchema.safeParse(input)
+    if (!parsed.success) return { success: false, error: 'Invalid complaint ID' }
+
+    const user = await requireUser()    // ← centralized guard
+    const supabase = await createAuthenticatedClient()
+
+    const { error } = await supabase
+        .from('complaints')
+        .update({ status: 'resolved', updated_at: new Date().toISOString() })
+        .eq('id', parsed.data.complaintId)
+
+    if (error) return { success: false, error: 'Failed to resolve complaint' }
+
+    try {
+        await inngest.send({ name: 'complaint/resolved', data: { complaintId: parsed.data.complaintId } })
+    } catch (e) { /* non-fatal */ }
+
+    return { success: true }
+}
+```
+
+### [MODIFY] `src/components/dashboard/columns.tsx`
+Replace CRDT `resolveComplaintLocally` with `resolveComplaint` Server Action + `router.refresh()`.
+
+---
+
+## Sprint C.2 — Secrets Scaffold
+
+### [NEW] `src/lib/aws-secrets.ts` — Inactive scaffold
+### [NEW] `.env.example` — All required env vars documented
+
+---
+
+## Complete File Inventory
+
+| File | Action | Sprint | Reason |
+|:-----|:-------|:-------|:-------|
+| `docker-compose.stayassist.yml` | NEW | A.1 | Isolated Redis on port 6380 |
+| `.env` | MODIFY | A.1+A.2+A.6 | Redis URL + JWT expiry + SSO env vars |
+| `.env.example` | NEW | C.2 | Onboarding documentation |
+| `src/lib/rate-limit.ts` | MODIFY | A.1 | Isolated Redis + fail-open |
+| `src/lib/rate-limit-acknowledge.ts` | MODIFY | A.1 | Same |
+| `database/migrations/029_add_is_active_column.sql` | NEW | A.2 | DB deactivation check |
+| **`src/lib/auth-guard.ts`** | **NEW** | **A.2** | **Centralized auth — foundation for governance** |
+| `src/actions/complaints.ts` | MODIFY | A.2+A.3+B.2+B.3 | Auth-guard + OTEL removal + key_version + resolveComplaint |
+| `src/actions/audit.ts` | MODIFY | A.2+A.3 | Auth-guard + OTEL removal |
+| `src/actions/sla.ts` | MODIFY | A.2+A.3 | Auth-guard + OTEL removal |
+| `src/actions/workflow.ts` | MODIFY | A.2+A.3 | Auth-guard + OTEL removal |
+| `src/lib/telemetry.ts` | MODIFY | A.3 | No-op stubs |
+| `src/lib/otel-node-sdk.ts` | DELETE | A.3 | OTEL bootstrap removed |
+| `src/instrumentation.ts` | MODIFY | A.3 | Remove OTEL import |
+| `src/inngest/functions.ts` | MODIFY | A.3 | OTEL removal |
+| `src/app/api/monitoring-test/route.ts` | DELETE | A.3 | OTEL test removed |
+| `next.config.mjs` | MODIFY | A.3+A.4 | OTEL externals + PWA wrapper |
+| `package.json` | MODIFY | A.3+A.4 | Remove 15 packages |
+| `src/lib/offline-sync.ts` | DELETE | A.4 | Offline sync removed |
+| `src/lib/indexeddb-schema.ts` | DELETE | A.4 | CRDT schema removed |
+| `src/store/useOfflineQueueStore.ts` | DELETE | A.4 | Offline queue removed |
+| `src/store/useCrdtStore.ts` | DELETE | A.4 | CRDT store removed |
+| `src/app/(patient)/intake/IntakeForm.tsx` | MODIFY | A.4 | Remove offline branches |
+| `src/components/dashboard/columns.tsx` | MODIFY | A.4+B.3 | CRDT → Server Action |
+| **`src/app/login/page.tsx`** | **MODIFY** | **A.5+A.6** | **Remove cookie synthesis, PKCE flow, env vars** |
+| `src/components/widgets/ssr-transparency-widget.tsx` | MODIFY | A.9 | Add exception comment |
+| **`src/app/(admin)/layout.tsx`** | **NEW** | **A.7** | **Admin role gate** |
+| **`src/app/(dpo)/layout.tsx`** | **NEW** | **A.7** | **DPO + MFA gate** |
+| **`src/app/(staff)/layout.tsx`** | **NEW** | **A.7** | **Authenticated user gate** |
+| **`src/app/api/hospitals/route.ts`** | **MODIFY** | **A.8** | **Add requireRole(['Admin'])** |
+| **`src/app/api/faqs/route.ts`** | **MODIFY** | **A.8** | **Add requireRole to POST/PUT/DELETE** |
+| **`src/app/(admin)/org-dashboard/page.tsx`** | **MODIFY** | **A.9** | **Service-role → user-scoped client** |
+| `database/migrations/030_drop_patient_fk.sql` | NEW | B.1 | Drop FK + UUID CHECK |
+| `database/migrations/031_add_key_version.sql` | NEW | B.2 | AES key rotation |
+| `src/lib/aws-secrets.ts` | NEW | C.2 | Inactive scaffold |
+
+**Bold** = New session governance changes (8 files added/modified by A.5–A.9)
+
+| Category | Count |
+|:---------|:------|
+| Files created | 8 |
+| Files modified | 19 |
+| Files deleted | 8 |
+| **Total files touched** | **35** |
+| Packages removed | 15 (11 OTEL + 4 offline) |

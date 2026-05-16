@@ -1,0 +1,133 @@
+# Task 4.3 Implementation Plan: Multi-Channel Notification Engine
+
+## Goal
+Build a fully compliant, multi-channel notification engine that dispatches zero-PHI alerts via email, SMS (TRAI/DLT compliant), and in-app channels, with 1-click deep-link acknowledgment that cancels SLA timers.
+
+---
+
+## Proposed Changes
+
+### Deno Edge Functions
+
+#### [NEW] [on-complaint-created/index.ts](file:///c:/Application%20V4.0/supabase/supabase/functions/on-complaint-created/index.ts)
+
+- **Trigger:** Supabase Database Webhook on `complaints` INSERT
+- **Flow:**
+  1. Extract `complaint_id`, `department_id`, `hospital_id` from webhook payload
+  2. Check `processed_events` for idempotency → skip if already processed
+  3. Query `on_call_schedules` → find active shift manager for `department_id`
+  4. Fallback: if no active shift → route to Quality Coordinator
+  5. Generate `secure_link_id` (UUID) → INSERT into `notifications`
+  6. Dispatch in-app notification (zero PHI: only link ID + department + severity)
+  7. INSERT into `processed_events`
+
+#### [NEW] [on-sla-breach/index.ts](file:///c:/Application%20V4.0/supabase/supabase/functions/on-sla-breach/index.ts)
+
+- **Trigger:** Supabase Database Webhook on `sla_breach_log` INSERT
+- **Flow:**
+  1. Idempotency check via `processed_events`
+  2. Query breach record → get `complaint_id`, `escalation_level`
+  3. Query `on_call_schedules` → identify on-call manager
+  4. Generate JWT-signed deep-link: `{ complaintId, token: UUID, exp: now + 15min }`
+  5. **SMS Dispatch (MSG91 primary):**
+     ```
+     POST https://api.msg91.com/api/v5/flow/
+     Headers: { authkey: MSG91_API_KEY }
+     Body: { flow_id: DLT_TEMPLATE_ID, mobiles: manager_phone, complaintRef: ticket_id }
+     ```
+  6. **Fallback (Twilio):** If MSG91 returns non-200:
+     ```
+     POST https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages
+     Body: { To: phone, From: SENDER, Body: DLT_TEMPLATE_TEXT }
+     ```
+  7. INSERT `notifications` → INSERT `processed_events`
+
+#### [NEW] [nightly-compliance-audit/index.ts](file:///c:/Application%20V4.0/supabase/supabase/functions/nightly-compliance-audit/index.ts)
+
+- **Trigger:** `pg_cron` schedule at `0 21 * * *` UTC (02:30 IST)
+- **Checks:**
+  - Complaints with `status = 'submitted'` AND `created_at < NOW() - INTERVAL '24 hours'` (acknowledgment breach)
+  - Complaints with `is_escalated = true` AND `escalated_to IS NULL` (NULL escalation gap)
+  - Complaints stuck in `investigating` for > 7 days
+  - `capa_validated` complaints without corresponding audit_logs CAPA signature entry
+- **Output:** Aggregated compliance digest → insert as `security_alerts` row
+
+---
+
+### Deep-Link Acknowledgment API
+
+#### [NEW] [route.ts](file:///c:/Application%20V4.0/src/app/api/acknowledge/route.ts)
+
+```ts
+export async function POST(request: NextRequest) {
+  // 1. Rate limit: 5 req/min via Redis Token Bucket
+  const rateCheck = await rateLimitAcknowledge(ip);
+  if (!rateCheck.success) return NextResponse.json({ error: 'Rate limited' }, { status: 429 });
+
+  // 2. Validate JWT-signed token
+  const { token, complaintId } = await verifyDeepLinkToken(body.token);
+
+  // 3. Idempotency: check processed_events
+  const existing = await supabase.from('processed_events').select('id').eq('event_id', token).single();
+  if (existing.data) return NextResponse.json({ error: 'Token already consumed' }, { status: 403 });
+
+  // 4. Execute acknowledgment
+  await transitionComplaintStatus(complaintId, 'acknowledged');
+
+  // 5. Cancel SLA timer
+  await inngest.send({ name: 'complaint/resolved', data: { complaintId } });
+
+  // 6. Mark notification as read
+  await supabase.from('notifications').update({ status: 'Read' }).eq('complaint_id', complaintId);
+
+  // 7. Record processed event
+  await supabase.from('processed_events').insert({ event_id: token, event_name: 'acknowledge_click' });
+
+  return NextResponse.json({ success: true });
+}
+```
+
+#### [NEW] [rate-limit-acknowledge.ts](file:///c:/Application%20V4.0/src/lib/rate-limit-acknowledge.ts)
+- Redis Token Bucket: `limit = 5`, `window = 60s`
+- Keyed on IP address: `ratelimit:acknowledge:${ip}`
+
+---
+
+### TRAI/DLT Configuration
+
+#### [MODIFY] [.env](file:///c:/Application%20V4.0/.env)
+```
+MSG91_API_KEY=<key>
+MSG91_SENDER_ID=<6-char-id>
+MSG91_DLT_TEMPLATE_ID=<registered-template>
+TWILIO_ACCOUNT_SID=<sid>
+TWILIO_AUTH_TOKEN=<token>
+TWILIO_PHONE_NUMBER=<number>
+```
+
+---
+
+## Zero-PHI Validation Matrix
+
+| Channel | Fields Transmitted | PHI Present? |
+|---------|-------------------|--------------|
+| SMS | `secure_link_id`, department name, severity | ❌ NO |
+| Email | `secure_link_id`, ticket reference, department | ❌ NO |
+| In-App | `secure_link_id`, severity badge, SLA countdown | ❌ NO |
+| Deep-Link URL | `complaintId` (UUID), `token` (UUID) | ❌ NO |
+
+---
+
+## Verification Plan
+
+### Automated
+1. Fire `on-sla-breach` webhook → verify MSG91 API call contains DLT Template ID
+2. Simulate MSG91 failure → verify Twilio fallback executes
+3. POST to `/api/acknowledge` with valid token → verify complaint status = `acknowledged`
+4. POST same token again → verify `403` response
+5. POST 6 times in 60s → verify 6th returns `429`
+6. Run `nightly-compliance-audit` → verify `security_alerts` row inserted
+
+### Manual
+- Trigger real SMS via MSG91 → verify delivery on test phone
+- Click deep-link in SMS → verify SLA timer cancels and notification reads

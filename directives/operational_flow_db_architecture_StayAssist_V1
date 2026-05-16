@@ -1,0 +1,152 @@
+# StayAssist V1 — Operational Flow & Database Architecture Guide
+> **Generated:** 2026-04-09 | **Status:** Production-Ready Flow (Zero Seed Scripts)
+
+This document outlines the actual end-to-end operational flow of the StayAssist V1 platform, based purely on the defined database schema, foreign-key relationships, and application code.
+
+**This is how the system operates in a clean, production environment without any mock seed data.**
+
+---
+
+## 🏗️ 1. ID Generation Architecture
+
+In StayAssist V1, you **never** manually define IDs like `"00000000-0000-0000-0000-000000000000"`.
+Every entity across the schema uses **PostgreSQL's `gen_random_uuid()`** as the primary key default.
+
+When you run an `INSERT` statement without an `id` field, PostgreSQL automatically generates a v4 cryptographically secure UUID and assigns it.
+
+---
+
+## 🏥 2. The Initialization Flow (Onboarding a Facility)
+
+Because of strict foreign key constraints, you must build the data hierarchy from the top down. A hospital cannot exist without an organization, a department cannot exist without a hospital, and a user cannot exist without a department.
+
+This is a **one-time manual administration task** per health system.
+
+### Step 2.1: Create the Organization
+*The highest-level container (e.g., "Apollo Hospitals Enterprise")*
+
+```sql
+INSERT INTO public.organizations (name)
+VALUES ('City General Hospital Group')
+RETURNING id;
+-- 📌 COPY THIS UUID (We will call it <ORG_ID>)
+```
+
+### Step 2.2: Create the Hospital
+*A physical facility belonging to the organization.*
+
+```sql
+INSERT INTO public.hospitals (organization_id, name, nabh_accredited, jci_accredited, address)
+VALUES (
+  '<ORG_ID>',
+  'City General Hospital Main Campus',
+  TRUE, FALSE,
+  '123 Main Road, Mumbai - 400001'
+)
+RETURNING id;
+-- 📌 COPY THIS UUID (We will call it <HOSPITAL_ID>)
+```
+
+### Step 2.3: Create SLA Configurations
+*Define the compliance thresholds for the new hospital based on NABH/JCI standards.*
+
+```sql
+INSERT INTO public.sla_configurations (hospital_id, severity_level, max_acknowledgement_hours, max_resolution_hours)
+VALUES
+  ('<HOSPITAL_ID>', 'critical', 1, 24),
+  ('<HOSPITAL_ID>', 'high',     4, 72),
+  ('<HOSPITAL_ID>', 'medium',   8, 168),
+  ('<HOSPITAL_ID>', 'low',      24, 720);
+```
+*(Note: Code must be updated in Sprint C.3 to read these dynamically instead of using the hardcoded 10-minute mock override).*
+
+### Step 2.4: Create Departments
+*The routing destinations for complaints.*
+
+```sql
+INSERT INTO public.departments (hospital_id, name, escalation_level)
+VALUES
+  ('<HOSPITAL_ID>', 'Quality & Patient Safety',  3),
+  ('<HOSPITAL_ID>', 'Emergency & Trauma',        1),
+  ('<HOSPITAL_ID>', 'Administration',            4)
+RETURNING id, name;
+-- 📌 COPY THESE UUIDs (We will call them <DEPT_ID>)
+```
+
+---
+
+## 👥 3. The Staff Identity Flow (SSO Sync)
+
+Staff identity is split between two systems: **Authentik** (the Identity Provider handling passwords/MFA) and **Supabase** (the database holding roles and permissions).
+
+```mermaid
+graph TD
+    A[Authentik IdP] -->|SAML/OIDC Login| B[Supabase `auth.users`]
+    B -->|Manual Profile Creation| C[Supabase `public.users`]
+```
+
+1. **Provision in Authentik:** Create the staff member (e.g., `dr.sharma@cityhospital.local`) in the Authentik Admin UI.
+2. **First Login:** The staff member logs into StayAssist via SSO. This automatically generates a row in Supabase's secure `auth.users` table.
+3. **Get Auth UUID:** Query Supabase to find their auto-generated auth UUID.
+   ```sql
+   SELECT id FROM auth.users WHERE email = 'dr.sharma@cityhospital.local';
+   -- 📌 COPY THIS UUID (We will call it <AUTH_ID>)
+   ```
+4. **Create App Profile & Role:** Link the auth identity to the hospital and department.
+   ```sql
+   INSERT INTO public.users (id, email, first_name, last_name, role, department_id, hospital_id, mfa_enabled, is_active)
+   VALUES (
+     '<AUTH_ID>', -- MUST MATCH EXACTLY
+     'dr.sharma@cityhospital.local',
+     'Priya', 'Sharma',
+     'quality_coordinator',
+     '<DEPT_ID>',
+     '<HOSPITAL_ID>',
+     TRUE, TRUE
+   );
+   ```
+
+*(Once the staff member has a profile in `public.users`, Row-Level Security (RLS) policies will allow them to see the dashboard).*
+
+---
+
+## 🩺 4. The Patient Intake Flow (Daily Operations)
+
+Once the foundation is built, the system is fully autonomous.
+
+### Step 4.1: QR Code Distribution
+The hospital generates physical QR Code posters linked to their `<HOSPITAL_ID>`.
+* `https://patient.stayassist.com/intake?hospitalId=<HOSPITAL_ID>`
+
+### Step 4.2: Complaint Submission
+1. Patient scans QR code and opens the online React Intake Form.
+2. Patient verifies identity via OTP (Sprint C.1 dependency).
+3. Form is submitted.
+4. **Server Action `createComplaint()` executes:**
+   * Validates input.
+   * Inserts row into `public.complaints` containing metadata (status: `submitted`, severity, SLA deadline).
+   * `gen_random_uuid()` generates the `<COMPLAINT_ID>`.
+   * Inserts row into `public.complaint_phi` containing encrypted patient details, linked via `<COMPLAINT_ID>`. Sets `key_version = 1`.
+
+### Step 4.3: Real-Time Notification & Routing
+1. Supabase Realtime detects the `INSERT` on `public.complaints`.
+2. Websocket pushes the new row to all staff currently viewing the Staff Dashboard where `user.hospital_id == complaint.hospital_id`.
+3. Inngest receives an event to start the SLA Acknowledgement countdown timer.
+
+---
+
+## ✅ 5. The Resolution Workflow
+
+The core functionality of the active application.
+
+1. **Acknowledgement:** A staff member clicks "Acknowledge" on the dashboard.
+   * Status changes from `submitted` ➡️ `acknowledged`.
+   * `public.audit_logs` records the action (immutable).
+   * `public.complaint_status_history` adds a trackable lifecycle row.
+   * Inngest cancels the Acknowledgement SLA timer and starts the Resolution SLA timer.
+2. **Investigation:** Staff user updates the status to `investigating` and assigns it to a specific `<DEPT_ID>`.
+3. **Resolution:** Staff user clicks the "Resolve" button.
+   * Server Action `resolveComplaint()` executes.
+   * Status changes ➡️ `resolved`.
+   * Inngest cancels the Resolution SLA timer.
+4. **CAPA:** Quality Coordinators review the resolution and perform a CAPA (Corrective and Preventive Action) sign-off, closing the ticket permanently. The Organization Dashboard materialized views are rebuilt with the new metrics.

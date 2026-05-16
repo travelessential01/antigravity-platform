@@ -1,0 +1,36 @@
+# Task 4.2: Supabase Realtime Subscriptions & WebSocket RLS
+
+**Owner:** Backend Engineer | **Risk:** MEDIUM | **Sprint:** 4
+
+---
+
+## Sub-Tasks
+
+### A. Realtime Channel Setup
+- [ ] Enable Supabase Realtime on required tables: `complaints`, `notifications`, `sla_breach_log`
+- [ ] Create `src/lib/realtime-subscriptions.ts` with typed subscription factories
+- [ ] `subscribeToComplaints(channel, departmentId?)` — metadata columns only, zero PHI
+- [ ] `subscribeToNotifications(channel, userId)` — personal notification feed
+- [ ] `subscribeToBreaches(channel, hospitalId)` — SLA breach events
+
+### B. WebSocket RLS Enforcement
+- [ ] Every WebSocket connection passes the user's JWT in the authorization header
+- [ ] Supabase Realtime inherits RLS policies from `auth.jwt()` claims
+- [ ] Ward Nurses: receive events ONLY for their `department_id`
+- [ ] Quality Coordinators: receive events for their entire `hospital_id`
+- [ ] Cross-tenant isolation: Hospital A user receives ZERO events from Hospital B
+
+### C. Instant SLA Breach Hoisting
+- [ ] Modify [src/store/useSlaStore.ts](file:///c:/Application%20V4.0/src/store/useSlaStore.ts) — add `hoist(complaintId)` method
+- [ ] `hoist()` reorders the DataTable state to push the breached complaint to index 0
+- [ ] Wire breach subscription callback → `useSlaStore.hoist()` → React re-render
+- [ ] Validate: card moves to top of DataTable WITHOUT page refresh
+
+### D. Dashboard Integration
+- [ ] Initialize Realtime channels on `/dashboard` mount
+- [ ] Cleanup subscriptions on unmount (prevent memory leaks)
+- [ ] Handle reconnection gracefully (Supabase Realtime auto-reconnect)
+
+---
+
+**Deliverable:** SLA breach triggers instant card hoist without page refresh

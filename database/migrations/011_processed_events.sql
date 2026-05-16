@@ -22,7 +22,7 @@ BEGIN
         PERFORM cron.schedule(
             'purge_processed_events',
             '30 20 * * *',  -- 02:00 IST = 20:30 UTC
-            $$DELETE FROM public.processed_events WHERE created_at < NOW() - INTERVAL '7 days'$$
+            $cron$DELETE FROM public.processed_events WHERE created_at < NOW() - INTERVAL '7 days'$cron$
         );
     END IF;
 END $$;

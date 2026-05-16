@@ -1,6 +1,6 @@
 # Multi-Agent Dependency Chains
 
-Based on the 7-sprint operational timeline from the V4.1 Master Artifact, the dependency chain follows a strict progression from infrastructure out to the client and compliance layers. 
+Based on the 7-sprint operational timeline from the V4.1 Master Artifact, the dependency chain follows a strict progression from infrastructure out to the client and compliance layers.
 
 ## Phase 1: Foundational Infrastructure (The Blockers)
 *This phase must be completed before any application code is written.*
@@ -23,7 +23,7 @@ Based on the 7-sprint operational timeline from the V4.1 Master Artifact, the de
 
 ## Phase 5: Hardening & Validation (The Final Gates)
 *Requires the platform to be fully feature-complete.*
-8. **Agent 6 (QA / Chaos Engineer)** depends on **all prior agents** to have their systems online. They stress-test Agent 4's PWA with "Thundering Herd" simulations, pen-test Agent 3's security endpoints, and validate Agent 7's Disaster Recovery setups. 
+8. **Agent 6 (QA / Chaos Engineer)** depends on **all prior agents** to have their systems online. They stress-test Agent 4's PWA with "Thundering Herd" simulations, pen-test Agent 3's security endpoints, and validate Agent 7's Disaster Recovery setups.
 9. **Agent 5 (Compliance)** acts as the final terminal dependency, requiring Agent 6 to finish so they can run the JCI Mock Surveyor Dry Run before handing the system back to **Agent 7 (DevOps)** for production deployment.
 
 ## Visualized Chain
